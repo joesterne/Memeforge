@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "CanvasObject": {
+      "title": "CanvasObject",
+      "description": "Object on the meme canvas",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["text", "image"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "text": { "type": "string" },
+        "url": { "type": "string" },
+        "fontSize": { "type": "number" },
+        "fontFamily": { "type": "string" },
+        "fill": { "type": "string" },
+        "draggable": { "type": "boolean" },
+        "scaleX": { "type": "number" },
+        "scaleY": { "type": "number" },
+        "rotation": { "type": "number" }
+      },
+      "required": ["id", "type", "x", "y"]
+    },
+    "Meme": {
+      "title": "Meme",
+      "description": "A customized meme",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "templateUrl": { "type": ["string", "null"] },
+        "objects": { "type": "array", "items": { "$ref": "#/entities/CanvasObject" } }
+      },
+      "required": ["authorId", "createdAt", "objects"]
+    }
+  },
+  "firestore": {
+    "/memes/{memeId}": {
+      "schema": "#/entities/Meme",
+      "description": "User created memes"
+    }
+  }
+}

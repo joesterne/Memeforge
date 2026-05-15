@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Primitive Definitions
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    
+    // 2. Entity Validations
+    function isValidMeme(data) {
+      return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
+             data.keys().size() <= 4 &&
+             data.authorId is string &&
+             data.authorId == request.auth.uid &&
+             data.createdAt is string &&
+             data.createdAt.size() <= 50 &&
+             data.objects is list &&
+             data.objects.size() <= 100 &&
+             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
+    }
+    
+    function isValidMemeUpdate(data) {
+      return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
+             data.keys().size() <= 4 &&
+             data.authorId is string &&
+             data.authorId == existing().authorId &&
+             data.createdAt is string &&
+             data.createdAt == existing().createdAt &&
+             data.objects is list &&
+             data.objects.size() <= 100 &&
+             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
+    }
+
+    // 3. Collection Rules
+    match /memes/{memeId} {
+      // Anyone can read a meme (for sharing)
+      allow get: if isValidId(memeId);
+      // Only author can list their own
+      allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
+      
+      allow create: if isSignedIn() && isValidId(memeId) && isValidMeme(incoming());
+      
+      allow update: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid && isValidMemeUpdate(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['objects', 'templateUrl'])
+      );
+      
+      allow delete: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid;
+    }
+  }
+}
