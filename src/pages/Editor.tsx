@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, memo } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
-import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Transformer } from "react-konva";
+import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Transformer, Rect } from "react-konva";
 import useImage from "use-image";
 import { v4 as uuidv4 } from "uuid";
 import { Type, Download, Share2, Users, Save, ImagePlus, Undo, Trash2, ArrowUpToLine, ArrowDownToLine, ArrowUp, ArrowDown, ImageIcon, Camera } from "lucide-react";
@@ -10,7 +10,6 @@ import { db } from "../lib/firebase";
 import { collection, doc, setDoc, getDoc } from "firebase/firestore";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
 import Konva from "konva";
-import imageCompression from "browser-image-compression";
 
 interface CanvasObject {
   id: string;
@@ -117,9 +116,18 @@ export default function Editor() {
   const stageRef = useRef<any>(null);
   const trRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
+  const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
+  const [logicalSize, setLogicalSize] = useState({ width: 800, height: 800 });
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [upImage] = useImage(uploadedImageUrl || "");
+
+  useEffect(() => {
+      if (bgImage) {
+          setLogicalSize({ width: bgImage.width, height: bgImage.height });
+      } else if (upImage) {
+          setLogicalSize({ width: upImage.width, height: upImage.height });
+      }
+  }, [bgImage, upImage]);
 
   // Derive initial ID or Room ID
   const roomId = isRoom ? id : uuidv4();
@@ -177,7 +185,7 @@ export default function Editor() {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         if (entries[0] && entries[0].contentRect) {
-          setStageSize({
+          setContainerSize({
             width: entries[0].contentRect.width,
             height: entries[0].contentRect.height
           });
@@ -207,8 +215,8 @@ export default function Editor() {
           const newObj: CanvasObject = {
               id: uuidv4(),
               type: "text",
-              x: stageSize.width / 2 - 50,
-              y: stageSize.height / 2 - 20,
+              x: logicalSize.width / 2 - 50,
+              y: logicalSize.height / 2 - 20,
               text: "Double click to edit",
               fontSize: 40,
               fontFamily: "Impact, sans-serif",
@@ -221,12 +229,13 @@ export default function Editor() {
           if (socket) socket.emit("canvas-update", roomId, newObjs);
           return newObjs;
       });
-  }, [stageSize, socket, roomId]);
+  }, [logicalSize, socket, roomId]);
 
   const addImage = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
           try {
+              const { default: imageCompression } = await import("browser-image-compression");
               const options = {
                   maxSizeMB: 1,
                   maxWidthOrHeight: 1200,
@@ -241,8 +250,8 @@ export default function Editor() {
                          id: uuidv4(),
                          type: "image",
                          url: reader.result as string,
-                         x: stageSize.width / 2 - 100,
-                         y: stageSize.height / 2 - 100,
+                         x: logicalSize.width / 2 - 100,
+                         y: logicalSize.height / 2 - 100,
                          scaleX: 1,
                          scaleY: 1,
                          draggable: true,
@@ -257,7 +266,7 @@ export default function Editor() {
               console.error("Compression error:", error);
           }
       }
-  }, [stageSize, socket, roomId]);
+  }, [logicalSize, socket, roomId]);
 
   const handleDragEnd = useCallback((e: any) => {
       const id = e.target.id();
@@ -314,6 +323,7 @@ export default function Editor() {
       const file = e.target.files?.[0];
       if (file) {
           try {
+              const { default: imageCompression } = await import("browser-image-compression");
               const options = {
                   maxSizeMB: 1,
                   maxWidthOrHeight: 1200,
@@ -336,9 +346,13 @@ export default function Editor() {
       // clear selection first
       setSelectedId(null);
       setTimeout(() => {
-          const uri = stageRef.current.toDataURL({ pixelRatio: 2 });
+          const uri = stageRef.current.toDataURL({ 
+              pixelRatio: exportScale / renderScale,
+              mimeType: exportFormat,
+              quality: exportFormat === 'image/jpeg' ? 0.9 : undefined
+          });
           const link = document.createElement("a");
-          link.download = `meme-${roomId}.png`;
+          link.download = `meme-${roomId}.${exportFormat === 'image/png' ? 'png' : 'jpg'}`;
           link.href = uri;
           document.body.appendChild(link);
           link.click();
@@ -527,14 +541,20 @@ export default function Editor() {
       setTimeout(() => { window.addEventListener('click', handleOutsideClick); }, 0);
   };
 
+  const renderScale = Math.min(
+    (containerSize.width - 40) / logicalSize.width, // 40px padding 
+    (containerSize.height - 40) / logicalSize.height
+  ) || 1;
+
   return (
     <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-120px)] w-full pb-6">
       
       {/* Editor Main Canvas */}
-      <div className="flex-1 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden shadow-2xl flex flex-col" ref={containerRef}>
+      <div className="flex-1 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden shadow-2xl flex flex-col justify-center items-center" ref={containerRef}>
          <Stage 
-           width={stageSize.width} 
-           height={stageSize.height} 
+           width={logicalSize.width * renderScale} 
+           height={logicalSize.height * renderScale} 
+           scale={{ x: renderScale, y: renderScale }}
            onMouseDown={deselect}
            onTouchStart={deselect}
            ref={stageRef}
@@ -545,11 +565,11 @@ export default function Editor() {
                     <KonvaImage 
                       image={bgImage || upImage} 
                       name="bg" 
-                      width={stageSize.width} 
-                      height={stageSize.height} 
+                      width={logicalSize.width} 
+                      height={logicalSize.height} 
                     />
                  ) : (
-                    null
+                    <Rect width={logicalSize.width} height={logicalSize.height} fill="#ffffff" name="bg" />
                  )}
                  
                  {/* Draggable Objects */}
@@ -601,6 +621,27 @@ export default function Editor() {
              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">Toolbar</h3>
              
              <div className="flex flex-col gap-3">
+                 <div className="grid grid-cols-2 gap-2 mb-2 bg-zinc-800/50 p-2 rounded-xl border border-white/5">
+                     <div>
+                         <label className="text-[10px] text-zinc-400 uppercase mb-1 pl-1 block">Size W</label>
+                         <input 
+                             type="number"
+                             value={logicalSize.width}
+                             onChange={(e) => setLogicalSize(prev => ({ ...prev, width: Number(e.target.value) || 100 }))}
+                             className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
+                         />
+                     </div>
+                     <div>
+                         <label className="text-[10px] text-zinc-400 uppercase mb-1 pl-1 block">Size H</label>
+                         <input 
+                             type="number"
+                             value={logicalSize.height}
+                             onChange={(e) => setLogicalSize(prev => ({ ...prev, height: Number(e.target.value) || 100 }))}
+                             className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
+                         />
+                     </div>
+                 </div>
+
                  <button onClick={addText} className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5">
                      <Type className="w-4 h-4" /> Add Text
                  </button>

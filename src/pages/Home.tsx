@@ -18,12 +18,16 @@ interface MemeTemplate {
 
 type SortOption = 'trending' | 'recent' | 'new' | 'date_added';
 
+// Simple memory cache for memes
+let cachedMemes: MemeTemplate[] | null = null;
+let cachedTrends: string[] | null = null;
+
 export default function Home() {
   const { user } = useAuth();
-  const [templates, setTemplates] = useState<MemeTemplate[]>([]);
+  const [templates, setTemplates] = useState<MemeTemplate[]>(cachedMemes || []);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedMemes);
   const [searchingWeb, setSearchingWeb] = useState(false);
   const [webResultFetched, setWebResultFetched] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>('trending');
@@ -50,17 +54,27 @@ export default function Home() {
      });
   }, []);
 
-  const fetchTrending = useCallback(async () => {
+  const fetchTrending = useCallback(async (force = false) => {
+    if (cachedMemes && !force) {
+        setTemplates(cachedMemes);
+        setLoading(false);
+        return;
+    }
+    
     setLoading(true);
-    let trendsList: string[] = [];
-    try {
-        const trendsRes = await fetch("/api/trending-searches");
-        const trendsData = await trendsRes.json();
-        if (trendsData.success && trendsData.terms) {
-            trendsList = trendsData.terms;
+    let trendsList: string[] = cachedTrends || [];
+    
+    if (!cachedTrends || force) {
+        try {
+            const trendsRes = await fetch("/api/trending-searches");
+            const trendsData = await trendsRes.json();
+            if (trendsData.success && trendsData.terms) {
+                trendsList = trendsData.terms;
+                cachedTrends = trendsList;
+            }
+        } catch(e) {
+            console.error("Failed to fetch Google Trends", e);
         }
-    } catch(e) {
-        console.error("Failed to fetch Google Trends", e);
     }
     
     fetch("https://api.imgflip.com/get_memes")
@@ -84,6 +98,7 @@ export default function Home() {
               memes.sort((a: any, b: any) => boostScore(b.name) - boostScore(a.name));
           }
 
+          cachedMemes = memes;
           setTemplates(memes);
         }
         setLoading(false);
@@ -323,7 +338,7 @@ export default function Home() {
              </div>
              
              <button 
-                 onClick={fetchTrending}
+                 onClick={() => fetchTrending(true)}
                  className="flex items-center gap-2 px-3 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 text-xs font-bold uppercase tracking-wider transition-colors text-zinc-300"
                  title="Refresh Trending"
              >

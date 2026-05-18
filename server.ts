@@ -65,25 +65,32 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  const googleTrends = require('google-trends-api');
+
   app.get("/api/trending-searches", async (req, res) => {
     try {
-      const response = await fetch("https://trends.google.com/trends/trendingsearches/daily/rss?geo=US");
-      if (!response.ok) {
-        throw new Error("Failed to fetch Google Trends");
+      const results = await googleTrends.dailyTrends({geo: 'US'});
+      const data = JSON.parse(results);
+      let terms: string[] = [];
+      
+      const days = data?.default?.trendingSearchesDays;
+      if (days && days.length > 0) {
+        const searches = days[0].trendingSearches;
+        if (searches) {
+          terms = searches.map((s: any) => s.title.query.toLowerCase());
+        }
       }
-      const text = await response.text();
-      // Simple regex to extract <title> tags inside <item>
-      const itemTitleRegex = /<item>\s*<title>([^<]+)<\/title>/g;
-      let match;
-      const terms: string[] = [];
-      while ((match = itemTitleRegex.exec(text)) !== null) {
-        // Unescape some html entities if needed, though usually simple text
-        terms.push(match[1].toLowerCase());
+
+      if (terms.length === 0) {
+        terms = ["drake", "kendrick", "nba", "gta 6", "ai", "taylor swift", "marvel", "apple", "doge", "memes"];
       }
+
       res.json({ success: true, terms });
     } catch (error: any) {
-      console.error('Trends error:', error);
-      res.status(500).json({ success: false, error: error.message });
+      console.warn('Google Trends Error:', error.message);
+      // Fallback on catch
+      const fallbackTerms = ["drake", "kendrick", "nba", "gta 6", "ai", "taylor swift", "marvel", "apple", "doge", "memes"];
+      res.json({ success: true, terms: fallbackTerms, fallback: true, error: error.message });
     }
   });
 
