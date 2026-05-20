@@ -3,7 +3,7 @@ import { useParams, useLocation, useNavigate } from "react-router";
 import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Transformer, Rect } from "react-konva";
 import useImage from "use-image";
 import { v4 as uuidv4 } from "uuid";
-import { Type, Download, Share2, Users, Save, ImagePlus, Undo, Trash2, ArrowUpToLine, ArrowDownToLine, ArrowUp, ArrowDown, ImageIcon, Camera, Sparkles } from "lucide-react";
+import { Type, Download, Share2, Users, Save, ImagePlus, Undo, Trash2, ArrowUpToLine, ArrowDownToLine, ArrowUp, ArrowDown, ImageIcon, Camera, Sparkles, X } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../lib/firebase";
@@ -138,6 +138,15 @@ export default function Editor() {
   const [exportFormat, setExportFormat] = useState<"image/png" | "image/jpeg">("image/png");
   const [exportScale, setExportScale] = useState<number>(1);
   const [generatingAI, setGeneratingAI] = useState(false);
+  const [watermark, setWatermark] = useState({
+      enabled: false,
+      text: "Watermark",
+      opacity: 0.5,
+      position: "bottom-right"
+  });
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const markDirty = useCallback(() => setHasUnsavedChanges(true), []);
 
   const stageRef = useRef<any>(null);
   const trRef = useRef<any>(null);
@@ -231,10 +240,11 @@ export default function Editor() {
 
   const emitUpdate = useCallback((newObjects: CanvasObject[]) => {
       setObjects(newObjects);
+      markDirty();
       if (socket) {
           socket.emit("canvas-update", roomId, newObjects);
       }
-  }, [socket, roomId]);
+  }, [socket, roomId, markDirty]);
 
   const addText = useCallback(() => {
       setObjects(prev => {
@@ -253,9 +263,10 @@ export default function Editor() {
           };
           const newObjs = [...prev, newObj];
           if (socket) socket.emit("canvas-update", roomId, newObjs);
+          markDirty();
           return newObjs;
       });
-  }, [logicalSize, socket, roomId]);
+  }, [logicalSize, socket, roomId, markDirty]);
 
   const addImage = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -284,6 +295,7 @@ export default function Editor() {
                      };
                      const newObjs = [...prev, newObj];
                      if (socket) socket.emit("canvas-update", roomId, newObjs);
+                     markDirty();
                      return newObjs;
                  });
               };
@@ -292,7 +304,7 @@ export default function Editor() {
               console.error("Compression error:", error);
           }
       }
-  }, [logicalSize, socket, roomId]);
+  }, [logicalSize, socket, roomId, markDirty]);
 
   const handleDragEnd = useCallback((e: any) => {
       const id = e.target.id();
@@ -304,9 +316,10 @@ export default function Editor() {
               return o;
           });
           if (socket) socket.emit("canvas-update", roomId, newObjs);
+          markDirty();
           return newObjs;
       });
-  }, [socket, roomId]);
+  }, [socket, roomId, markDirty]);
 
   const handleTransformEnd = useCallback(() => {
       const node = stageRef.current.findOne(`#${selectedId}`);
@@ -334,9 +347,10 @@ export default function Editor() {
               return o;
           });
           if (socket) socket.emit("canvas-update", roomId, newObjs);
+          markDirty();
           return newObjs;
       });
-  }, [selectedId, socket, roomId]);
+  }, [selectedId, socket, roomId, markDirty]);
 
   const deselect = (e: any) => {
       const clickedOnEmpty = e.target === e.target.getStage() || e.target.hasName("bg");
@@ -406,6 +420,7 @@ export default function Editor() {
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
+          setHasUnsavedChanges(false);
       }, 100);
   };
 
@@ -444,6 +459,7 @@ export default function Editor() {
               authorId: snap.exists() ? snap.data().authorId : user.uid,
               createdAt: snap.exists() ? snap.data().createdAt : new Date().toISOString()
           }, { merge: true });
+          setHasUnsavedChanges(false);
           toast.success("Saved successfully!");
       } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
@@ -595,10 +611,19 @@ export default function Editor() {
   ) || 1;
 
   return (
+    <>
     <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-120px)] w-full pb-6">
       
       {/* Editor Main Canvas */}
       <div className="flex-1 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden shadow-2xl flex flex-col justify-center items-center" ref={containerRef}>
+         
+         <button 
+           onClick={() => hasUnsavedChanges ? setShowCloseModal(true) : navigate("/")}
+           className="absolute top-4 left-4 z-10 p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-all"
+         >
+            <X className="w-5 h-5" />
+         </button>
+
          <Stage 
            width={logicalSize.width * renderScale} 
            height={logicalSize.height * renderScale} 
@@ -659,6 +684,24 @@ export default function Editor() {
                        enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
                      />
                  )}
+
+                 {/* Watermark */}
+                 {watermark.enabled && watermark.text && (
+                     <KonvaText 
+                         text={watermark.text}
+                         x={20}
+                         y={watermark.position.includes("bottom") ? logicalSize.height - 40 : 20}
+                         width={logicalSize.width - 40}
+                         align={watermark.position.includes("right") ? "right" : "left"}
+                         fontSize={24}
+                         fontFamily="Impact, sans-serif"
+                         fill="white"
+                         stroke="black"
+                         strokeWidth={1}
+                         opacity={watermark.opacity}
+                         listening={false}
+                     />
+                 )}
              </Layer>
          </Stage>
       </div>
@@ -675,7 +718,7 @@ export default function Editor() {
                          <input 
                              type="number"
                              value={logicalSize.width}
-                             onChange={(e) => setLogicalSize(prev => ({ ...prev, width: Number(e.target.value) || 100 }))}
+                             onChange={(e) => { setLogicalSize(prev => ({ ...prev, width: Number(e.target.value) || 100 })); markDirty(); }}
                              className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
                          />
                      </div>
@@ -684,7 +727,7 @@ export default function Editor() {
                          <input 
                              type="number"
                              value={logicalSize.height}
-                             onChange={(e) => setLogicalSize(prev => ({ ...prev, height: Number(e.target.value) || 100 }))}
+                             onChange={(e) => { setLogicalSize(prev => ({ ...prev, height: Number(e.target.value) || 100 })); markDirty(); }}
                              className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
                          />
                      </div>
@@ -897,6 +940,64 @@ export default function Editor() {
            </div>
          )}
          
+         <div className="border-t border-white/5 pt-6">
+             <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">Watermark</h3>
+             <label className="flex items-center gap-2 mb-3 cursor-pointer text-sm font-bold text-white">
+                 <input 
+                     type="checkbox" 
+                     checked={watermark.enabled} 
+                     onChange={e => { setWatermark(p => ({ ...p, enabled: e.target.checked })); markDirty(); }} 
+                     className="w-4 h-4 rounded border border-white/20 bg-zinc-950 accent-indigo-500" 
+                 />
+                 Enable Watermark
+             </label>
+             {watermark.enabled && (
+                 <div className="space-y-3">
+                     <div>
+                         <label className="text-[10px] text-zinc-400 flex justify-between mb-1 pl-1">
+                             <span>Watermark Text</span>
+                         </label>
+                         <input 
+                             type="text" 
+                             value={watermark.text} 
+                             onChange={e => { setWatermark(p => ({ ...p, text: e.target.value })); markDirty(); }} 
+                             className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white" 
+                         />
+                     </div>
+                     <div className="grid grid-cols-2 gap-2">
+                         <div>
+                             <label className="text-[10px] text-zinc-400 mb-1 pl-1 block">Position</label>
+                             <select 
+                                 value={watermark.position} 
+                                 onChange={e => { setWatermark(p => ({ ...p, position: e.target.value as any })); markDirty(); }} 
+                                 className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
+                             >
+                                 <option value="bottom-right">Bottom Right</option>
+                                 <option value="bottom-left">Bottom Left</option>
+                                 <option value="top-right">Top Right</option>
+                                 <option value="top-left">Top Left</option>
+                             </select>
+                         </div>
+                         <div>
+                             <label className="text-[10px] text-zinc-400 flex justify-between mb-1 pl-1">
+                                 <span>Opacity</span>
+                                 <span>{Math.round(watermark.opacity * 100)}%</span>
+                             </label>
+                             <input 
+                                 type="range" 
+                                 min="0.1" 
+                                 max="1" 
+                                 step="0.1" 
+                                 value={watermark.opacity} 
+                                 onChange={e => { setWatermark(p => ({ ...p, opacity: parseFloat(e.target.value) })); markDirty(); }} 
+                                 className="w-full h-2 mt-2 accent-indigo-500 bg-zinc-950 border border-white/10 rounded-lg appearance-none cursor-pointer" 
+                             />
+                         </div>
+                     </div>
+                 </div>
+             )}
+         </div>
+
          <div className="flex-1 border-t border-white/5 pt-6 flex flex-col">
              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">Export & Sync</h3>
              <div className="flex flex-col gap-3">
@@ -938,5 +1039,58 @@ export default function Editor() {
          </div>
       </div>
     </div>
+    
+    {showCloseModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <div className="bg-zinc-900 border border-white/10 p-6 rounded-2xl w-full max-w-sm shadow-2xl">
+                <h2 className="text-xl font-bold text-white mb-2">Unsaved Changes</h2>
+                <p className="text-sm text-zinc-400 mb-6">
+                   You have unsaved changes. Do you want to export or save to cloud before leaving?
+                </p>
+                
+                <div className="flex flex-col gap-3">
+                    <div className="flex gap-2">
+                         <select 
+                            value={exportFormat}
+                            onChange={(e) => setExportFormat(e.target.value as any)}
+                            className="flex-1 bg-zinc-950 border border-white/10 rounded-xl p-2 text-sm text-white appearance-none"
+                         >
+                             <option value="image/png">PNG</option>
+                             <option value="image/jpeg">JPEG</option>
+                         </select>
+                         <button 
+                             onClick={() => { exportMeme(); setTimeout(() => navigate("/"), 200); }}
+                             className="flex-[2] py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all text-sm"
+                         >
+                             Export
+                         </button>
+                     </div>
+                     
+                     {user && (
+                         <button 
+                             onClick={async () => { await saveToFirebase(); navigate("/"); }}
+                             className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold transition-all text-sm border border-white/5"
+                         >
+                             Save to Cloud
+                         </button>
+                     )}
+  
+                     <button 
+                         onClick={() => navigate("/")}
+                         className="w-full py-2 bg-rose-500/20 hover:bg-rose-500/40 text-rose-500 rounded-xl font-bold transition-all text-sm border border-rose-500/20"
+                     >
+                         Leave Without Saving
+                     </button>
+                     <button 
+                         onClick={() => setShowCloseModal(false)}
+                         className="w-full py-2 bg-transparent hover:bg-white/5 text-zinc-400 rounded-xl font-bold transition-all text-sm"
+                     >
+                         Cancel
+                     </button>
+                 </div>
+            </div>
+        </div>
+    )}
+    </>
   );
 }
