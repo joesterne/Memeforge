@@ -2,9 +2,12 @@ import { useEffect, useState, useMemo, useCallback, useDeferredValue } from "rea
 import { Link } from "react-router";
 import { Search, TrendingUp, Upload, History, Trash2, Edit2, Image as ImageIcon, RefreshCw, Filter, Sparkles } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { collection, query, where, getDocs, deleteDoc, doc } from "firebase/firestore";
+import { collection, query, where, getDocs, deleteDoc, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
+import SearchBar from "../components/SearchBar";
+import TemplateCard from "../components/TemplateCard";
+import { toast } from "sonner";
 
 interface MemeTemplate {
   id: string;
@@ -16,7 +19,7 @@ interface MemeTemplate {
   dateAdded?: string;
 }
 
-type SortOption = 'trending' | 'recent' | 'new' | 'date_added';
+type SortOption = 'trending' | 'recent' | 'new' | 'date_added' | 'favorites';
 
 // Simple memory cache for memes
 let cachedMemes: MemeTemplate[] | null = null;
@@ -36,6 +39,9 @@ export default function Home() {
   
   const [userMemes, setUserMemes] = useState<any[]>([]);
   const [memesLoading, setMemesLoading] = useState(false);
+  
+  const [favorites, setFavorites] = useState<Record<string, any>>({});
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
 
   useEffect(() => {
      const saved = localStorage.getItem('recent_templates');
@@ -134,46 +140,33 @@ export default function Home() {
     if (!search) return;
     setGeneratingAI(true);
     try {
-        const { GoogleGenAI } = await import("@google/genai");
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [{ text: `A meme template about: ${search}. High quality, typical meme format, blank ready for text.` }]
-            },
-            config: {
-                imageConfig: {
-                    aspectRatio: "1:1"
-                }
-            }
+        const res = await fetch("/api/generate-meme", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: search })
         });
+        const data = await res.json();
         
-        let imageUrl = "";
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) {
-                imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-                break;
-            }
-        }
-        
-        if (imageUrl) {
+        if (data.success && data.imageUrl) {
             const aiMeme = {
                 id: `ai_${Date.now()}`,
                 name: `AI: ${search}`,
-                url: imageUrl,
+                url: data.imageUrl,
                 width: 800,
                 height: 800,
-                box_count: 2,
+                box_count: 2, 
                 dateAdded: new Date().toISOString()
             };
             setTemplates(prev => [aiMeme, ...prev]);
             setRecentIds(prev => [aiMeme.id, ...prev]);
         } else {
-            alert("Could not generate image.");
+            toast.error(data.error?.includes("API key") 
+              ? "Gemini API key is required. Please add it to your settings." 
+              : (data.error || "Could not generate image."));
         }
     } catch (e) {
-        console.error("AI Generation failed", e);
-        alert("Failed to generate image.");
+        console.error("AI Gen request failed", e);
+        toast.error("Failed to generate image. Ensure API connections are active.");
     } finally {
         setGeneratingAI(false);
     }
@@ -186,25 +179,34 @@ export default function Home() {
   useEffect(() => {
     if (!user) {
       setUserMemes([]);
+      setFavorites({});
       return;
     }
-    setMemesLoading(true);
-    const fetchUserMemes = async () => {
+    
+    const fetchUserData = async () => {
+      setMemesLoading(true);
+      setFavoritesLoading(true);
       try {
-        const q = query(
-          collection(db, "memes"), 
-          where("authorId", "==", user.uid)
-        );
-        const snaps = await getDocs(q);
-        const data = snaps.docs.map(d => ({ id: d.id, ...d.data() }));
-        data.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setUserMemes(data);
+        const qMemes = query(collection(db, "memes"), where("authorId", "==", user.uid));
+        const snapsMemes = await getDocs(qMemes);
+        const dataMemes = snapsMemes.docs.map(d => ({ id: d.id, ...d.data() }));
+        dataMemes.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setUserMemes(dataMemes);
+        
+        const qFavs = query(collection(db, "favorites"), where("userId", "==", user.uid));
+        const snapsFavs = await getDocs(qFavs);
+        const favsMap: Record<string, any> = {};
+        snapsFavs.docs.forEach(d => {
+            favsMap[d.data().templateId] = { id: d.id, ...d.data() };
+        });
+        setFavorites(favsMap);
       } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, "memes");
+        handleFirestoreError(err, OperationType.LIST, "userdata");
       }
       setMemesLoading(false);
+      setFavoritesLoading(false);
     };
-    fetchUserMemes();
+    fetchUserData();
   }, [user]);
 
   const handleDeleteMeme = useCallback(async (e: React.MouseEvent, id: string) => {
@@ -213,39 +215,89 @@ export default function Home() {
     try {
       await deleteDoc(doc(db, "memes", id));
       setUserMemes(prev => prev.filter(m => m.id !== id));
+      toast.success("Meme deleted successfully.");
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `memes/${id}`);
-      alert("Failed to delete.");
     }
   }, []);
+  
+  const toggleFavorite = useCallback(async (e: React.MouseEvent, template: MemeTemplate, isFavorited: boolean) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!user) {
+          toast.error("You must be logged in to favorite templates.");
+          return;
+      }
+      
+      const docId = `${user.uid}_${template.id}`;
+      
+      try {
+          if (isFavorited) {
+              await deleteDoc(doc(db, "favorites", docId));
+              setFavorites(prev => {
+                  const next = { ...prev };
+                  delete next[template.id];
+                  return next;
+              });
+              toast.success("Removed from favorites");
+          } else {
+              const newFav = {
+                  userId: user.uid,
+                  templateId: template.id,
+                  url: template.url,
+                  name: template.name,
+                  createdAt: new Date().toISOString()
+              };
+              await setDoc(doc(db, "favorites", docId), newFav);
+              setFavorites(prev => ({ ...prev, [template.id]: { id: docId, ...newFav } }));
+              toast.success("Added to favorites");
+          }
+      } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `favorites/${docId}`);
+      }
+  }, [user]);
 
   const sortedAndFilteredTemplates = useMemo(() => {
     let result = templates.filter(t => t.name.toLowerCase().includes(deferredSearch.toLowerCase()));
     
-    switch (sortBy) {
-        case 'recent':
-            result.sort((a, b) => {
-                const idxA = recentIds.indexOf(a.id);
-                const idxB = recentIds.indexOf(b.id);
-                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-                if (idxA !== -1) return -1;
-                if (idxB !== -1) return 1;
-                return 0; // fallback to trending order
-            });
-            break;
-        case 'new':
-            result.sort((a, b) => parseInt(b.id) - parseInt(a.id));
-            break;
-        case 'date_added':
-            result.sort((a, b) => new Date(b.dateAdded!).getTime() - new Date(a.dateAdded!).getTime());
-            break;
-        case 'trending':
-        default:
-            // imgflip default order is trending
-            break;
+    // Inject favorites that might not be in the current templates pool
+    if (sortBy === 'favorites') {
+        const favoriteTemplates = Object.values(favorites).map(f => ({
+            id: f.templateId,
+            name: f.name,
+            url: f.url,
+            width: 800,
+            height: 800,
+            box_count: 2
+        }));
+        
+        result = favoriteTemplates.filter(t => t.name.toLowerCase().includes(deferredSearch.toLowerCase()));
+    } else {
+        switch (sortBy) {
+            case 'recent':
+                result.sort((a, b) => {
+                    const idxA = recentIds.indexOf(a.id);
+                    const idxB = recentIds.indexOf(b.id);
+                    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                    if (idxA !== -1) return -1;
+                    if (idxB !== -1) return 1;
+                    return 0; // fallback to trending order
+                });
+                break;
+            case 'new':
+                result.sort((a, b) => parseInt(b.id) - parseInt(a.id));
+                break;
+            case 'date_added':
+                result.sort((a, b) => new Date(b.dateAdded!).getTime() - new Date(a.dateAdded!).getTime());
+                break;
+            case 'trending':
+            default:
+                // imgflip default order is trending
+                break;
+        }
     }
     return result;
-  }, [templates, deferredSearch, sortBy, recentIds]);
+  }, [templates, deferredSearch, sortBy, recentIds, favorites]);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -253,24 +305,15 @@ export default function Home() {
         <h1 className="text-4xl sm:text-5xl font-black tracking-tighter text-white">
           Create Epic Memes <span className="text-indigo-400">Together</span>
         </h1>
-        <p className="text-lg text-zinc-400">
+        <p className="text-lg text-zinc-600 dark:text-zinc-400">
           Start from a trending template, search for the perfect reaction, or upload your own image.
         </p>
         
-        <div className="relative max-w-lg mx-auto mt-6">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 w-5 h-5" />
-          <input 
-            type="text" 
-            placeholder="Search templates..." 
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full bg-zinc-950 border border-white/10 rounded-full pl-12 pr-4 py-3 text-sm focus:outline-none focus:border-indigo-500/50 transition-colors text-zinc-100 placeholder:text-zinc-500"
-          />
-        </div>
-      </div>
-
-      <div className="w-full bg-zinc-900 border border-dashed border-white/10 text-zinc-600 p-4 text-center rounded-2xl text-sm italic shadow-inner">
-          --- Advertisement Space ---
+        <SearchBar 
+          value={search} 
+          onChange={setSearch} 
+          placeholder="Search templates..." 
+        />
       </div>
 
       {user && (
@@ -331,6 +374,7 @@ export default function Home() {
                      className="bg-transparent text-xs text-zinc-300 font-medium p-1 mr-2 outline-none cursor-pointer"
                  >
                      <option value="trending">Trending</option>
+                     {user && <option value="favorites">Favorites</option>}
                      <option value="recent">Recently Clicked</option>
                      <option value="new">New</option>
                      <option value="date_added">Date Added</option>
@@ -346,9 +390,9 @@ export default function Home() {
                  <span className="hidden sm:inline">Refresh</span>
              </button>
 
-             <button className="hidden sm:flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg hover:brightness-110 font-bold text-[11px] uppercase tracking-wider shadow-lg transition-all border border-orange-500/50">
+             <Link to="/pro" className="hidden sm:flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg hover:brightness-110 font-bold text-[11px] uppercase tracking-wider shadow-lg transition-all border border-orange-500/50">
                 👑 Pro
-             </button>
+             </Link>
              <Link to="/editor/new" className="hidden lg:flex items-center gap-2 px-4 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 font-bold text-[11px] uppercase tracking-wider transition-colors text-zinc-300">
                 <Upload className="w-4 h-4" /> Use Blank
              </Link>
@@ -389,26 +433,15 @@ export default function Home() {
           </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-          {sortedAndFilteredTemplates.map(t => (
-            <Link 
+          {sortedAndFilteredTemplates.map((t) => (
+            <TemplateCard 
               key={t.id} 
-              to={`/editor/template_${t.id}`}
-              state={{ template: t }}
-              onClick={() => markRecent(t.id)}
-              className="group relative rounded-3xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 bg-zinc-900 border border-white/10 flex flex-col hover:border-indigo-500/50"
-            >
-              <div className="aspect-square w-full overflow-hidden bg-zinc-950">
-                <img 
-                  src={t.url} 
-                  alt={t.name}
-                  loading="lazy"
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                />
-              </div>
-              <div className="p-4 bg-zinc-900 flex-grow flex items-center justify-center border-t border-white/5">
-                 <p className="text-[10px] font-bold text-zinc-300 line-clamp-1 uppercase tracking-widest text-center">{t.name}</p>
-              </div>
-            </Link>
+              template={t} 
+              isFavorited={!!favorites[t.id]} 
+              user={user} 
+              onFavorite={toggleFavorite} 
+              onMarkRecent={markRecent} 
+            />
           ))}
         </div>
       )}

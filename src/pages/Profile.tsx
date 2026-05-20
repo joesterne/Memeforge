@@ -5,6 +5,7 @@ import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
 import { History, BarChart, Image as ImageIcon, Sparkles, CheckCircle2, User } from "lucide-react";
+import { toast } from "sonner";
 
 export default function Profile() {
   const { user } = useAuth();
@@ -46,12 +47,13 @@ export default function Profile() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        alert("Unable to start checkout. Check console for details.");
+        toast.error("Unable to start checkout. Check console for details.");
         console.error(data);
         setIsUpgrading(false);
       }
     } catch (err) {
       console.error(err);
+      toast.error("An error occurred while starting checkout.");
       setIsUpgrading(false);
     }
   };

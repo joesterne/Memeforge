@@ -52,5 +52,15 @@ service cloud.firestore {
       
       allow delete: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid;
     }
+    
+    // Favorites rules
+    match /favorites/{favoriteId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      // when creating, make sure userId matches the auth user, and doc name has that format. 
+      // Simplified validation for hackathon:
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
   }
 }

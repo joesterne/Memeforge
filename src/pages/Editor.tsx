@@ -3,12 +3,13 @@ import { useParams, useLocation, useNavigate } from "react-router";
 import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Transformer, Rect } from "react-konva";
 import useImage from "use-image";
 import { v4 as uuidv4 } from "uuid";
-import { Type, Download, Share2, Users, Save, ImagePlus, Undo, Trash2, ArrowUpToLine, ArrowDownToLine, ArrowUp, ArrowDown, ImageIcon, Camera } from "lucide-react";
+import { Type, Download, Share2, Users, Save, ImagePlus, Undo, Trash2, ArrowUpToLine, ArrowDownToLine, ArrowUp, ArrowDown, ImageIcon, Camera, Sparkles } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../lib/firebase";
-import { collection, doc, setDoc, getDoc } from "firebase/firestore";
+import { doc, setDoc, getDoc } from "firebase/firestore";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
+import { toast } from "sonner";
 import Konva from "konva";
 
 interface CanvasObject {
@@ -96,6 +97,30 @@ const CanvasText = memo(({ obj, setSelectedId, handleDragEnd, handleTransformEnd
 });
 CanvasText.displayName = "CanvasText";
 
+const AIPromptInput = memo(({ onGenerate, generatingAI }: { onGenerate: (prompt: string) => void, generatingAI: boolean }) => {
+    const [aiPrompt, setAiPrompt] = useState("");
+    return (
+        <div className="flex gap-2">
+            <input 
+                type="text" 
+                placeholder="Generate AI relative to..." 
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && onGenerate(aiPrompt)}
+                className="w-full bg-zinc-950 border border-white/10 rounded-xl p-3 text-sm text-white appearance-none"
+            />
+            <button 
+                onClick={() => onGenerate(aiPrompt)} 
+                disabled={generatingAI || !aiPrompt}
+                className="flex items-center justify-center px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all disabled:opacity-50"
+            >
+                {generatingAI ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <Sparkles className="w-5 h-5" />}
+            </button>
+        </div>
+    );
+});
+AIPromptInput.displayName = "AIPromptInput";
+
 export default function Editor() {
   const { id } = useParams();
   const location = useLocation();
@@ -112,6 +137,7 @@ export default function Editor() {
   const [saving, setSaving] = useState(false);
   const [exportFormat, setExportFormat] = useState<"image/png" | "image/jpeg">("image/png");
   const [exportScale, setExportScale] = useState<number>(1);
+  const [generatingAI, setGeneratingAI] = useState(false);
 
   const stageRef = useRef<any>(null);
   const trRef = useRef<any>(null);
@@ -342,6 +368,29 @@ export default function Editor() {
       }
   };
 
+  const handleAIGenerateBackground = async (prompt: string) => {
+      if (!prompt) return;
+      setGeneratingAI(true);
+      try {
+          const res = await fetch("/api/generate-meme", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: prompt })
+          });
+          const data = await res.json();
+          if (data.success && data.imageUrl) {
+              setUploadedImageUrl(data.imageUrl);
+          } else {
+              toast.error(data.error || "Failed to generate image.");
+          }
+      } catch(e) {
+          console.error(e);
+          toast.error("Error generating image.");
+      } finally {
+          setGeneratingAI(false);
+      }
+  };
+
   const exportMeme = () => {
       // clear selection first
       setSelectedId(null);
@@ -379,13 +428,13 @@ export default function Editor() {
   };
 
   const saveToFirebase = async () => {
-      if (!user) return alert("Must be signed in to save!");
+      if (!user) return toast.error("Must be signed in to save!");
       setSaving(true);
       try {
           const ref = doc(db, "memes", roomId!);
           const snap = await getDoc(ref);
           if (snap.exists() && snap.data().authorId !== user.uid) {
-               alert("You are not the author of this meme!");
+               toast.error("You are not the author of this meme!");
                setSaving(false);
                return;
           }
@@ -395,10 +444,9 @@ export default function Editor() {
               authorId: snap.exists() ? snap.data().authorId : user.uid,
               createdAt: snap.exists() ? snap.data().createdAt : new Date().toISOString()
           }, { merge: true });
-          alert("Saved successfully!");
+          toast.success("Saved successfully!");
       } catch (err) {
           handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
-          alert("Failed to save.");
       }
       setSaving(false);
   };
@@ -661,6 +709,10 @@ export default function Editor() {
                      <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                  </label>
 
+                 <div className="flex flex-col gap-2 pt-2 pb-2">
+                     <AIPromptInput onGenerate={handleAIGenerateBackground} generatingAI={generatingAI} />
+                 </div>
+
                  <button 
                    onClick={deleteSelected} 
                    disabled={!selectedId}
@@ -858,7 +910,7 @@ export default function Editor() {
 
                  <button onClick={() => {
                      navigator.clipboard.writeText(window.location.href);
-                     alert("Collab link copied!");
+                     toast.success("Collab link copied!");
                  }} className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl font-bold transition-all border border-emerald-500/20 mt-2">
                      <Users className="w-4 h-4" /> Invite Collaborator
                  </button>

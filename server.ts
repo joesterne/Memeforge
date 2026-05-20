@@ -4,6 +4,7 @@ import path from "path";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
+import googleTrends from "google-trends-api";
 
 let stripeClient: Stripe | null = null;
 function getStripe(): Stripe {
@@ -65,12 +66,21 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  const googleTrends = require('google-trends-api');
-
   app.get("/api/trending-searches", async (req, res) => {
     try {
-      const results = await googleTrends.dailyTrends({geo: 'US'});
-      const data = JSON.parse(results);
+      const results: any = await Promise.race([
+        googleTrends.dailyTrends({geo: 'US'}),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 2500))
+      ]);
+      
+      let data;
+      try {
+        data = JSON.parse(results);
+      } catch (parseError) {
+        console.warn("Google Trends returned invalid JSON (likely rate limited or blocked). Using fallback.");
+        return res.json({ success: true, terms: ["drake", "kendrick", "nba", "gta 6", "ai", "taylor swift", "marvel", "apple", "doge", "memes"] });
+      }
+
       let terms: string[] = [];
       
       const days = data?.default?.trendingSearchesDays;
@@ -131,6 +141,44 @@ async function startServer() {
       res.json({ success: true, memes });
     } catch (error: any) {
       console.error('Search error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/generate-meme", express.json(), async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text) return res.status(400).json({ error: "Text is required" });
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-image',
+          contents: {
+              parts: [{ text: `A meme template about: ${text}. High quality, typical meme format, blank ready for text.` }]
+          },
+          config: {
+              imageConfig: {
+                  aspectRatio: "1:1"
+              }
+          }
+      });
+      
+      let imageUrl = "";
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+          if (part.inlineData) {
+              imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+              break;
+          }
+      }
+      
+      if (imageUrl) {
+        res.json({ success: true, imageUrl });
+      } else {
+        res.status(500).json({ success: false, error: "Failed to generate image" });
+      }
+    } catch (error: any) {
+      console.error('AI Generation error:', error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
