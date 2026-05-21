@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useDeferredValue } from "react";
-import { Link } from "react-router";
-import { Search, TrendingUp, Upload, History, Trash2, Edit2, Image as ImageIcon, RefreshCw, Filter, Sparkles } from "lucide-react";
+import { Link, useNavigate } from "react-router";
+import { Search, TrendingUp, Upload, History, Trash2, Edit2, Image as ImageIcon, RefreshCw, Filter, Sparkles, Dices } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { collection, query, where, getDocs, deleteDoc, doc, setDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
@@ -27,6 +27,7 @@ let cachedTrends: string[] | null = null;
 
 export default function Home() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [templates, setTemplates] = useState<MemeTemplate[]>(cachedMemes || []);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -299,6 +300,14 @@ export default function Home() {
     return result;
   }, [templates, deferredSearch, sortBy, recentIds, favorites]);
 
+  const feelLucky = useCallback(() => {
+    if (templates.length > 0) {
+      const randomIndex = Math.floor(Math.random() * templates.length);
+      const randomTemplate = templates[randomIndex];
+      navigate(`/editor/template_${randomTemplate.id}`, { state: { template: randomTemplate } });
+    }
+  }, [templates, navigate]);
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="text-center space-y-4 max-w-2xl mx-auto py-8">
@@ -309,11 +318,21 @@ export default function Home() {
           Start from a trending template, search for the perfect reaction, or upload your own image.
         </p>
         
-        <SearchBar 
-          value={search} 
-          onChange={setSearch} 
-          placeholder="Search templates..." 
-        />
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 max-w-2xl mx-auto mt-6 px-4">
+          <SearchBar 
+            value={search} 
+            onChange={setSearch} 
+            placeholder="Search templates..." 
+            className="w-full sm:flex-1"
+          />
+          <button 
+            onClick={feelLucky}
+            className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-full font-bold transition-all shadow-lg whitespace-nowrap text-sm group"
+          >
+            <Dices className="w-5 h-5 text-indigo-400 animate-spin" style={{ animationDuration: '4s' }} />
+            I'm Feeling Lucky
+          </button>
+        </div>
       </div>
 
       {user && (

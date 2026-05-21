@@ -4,11 +4,12 @@ interface SearchBarProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  className?: string;
 }
 
-export default function SearchBar({ value, onChange, placeholder = "Search..." }: SearchBarProps) {
+export default function SearchBar({ value, onChange, placeholder = "Search...", className = "max-w-lg mx-auto mt-6" }: SearchBarProps) {
   return (
-    <div className="relative max-w-lg mx-auto mt-6 group">
+    <div className={`relative group ${className}`}>
       <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 dark:text-zinc-500 w-5 h-5 transition-colors group-focus-within:text-indigo-500 dark:group-focus-within:text-indigo-400" />
       <input 
         type="text" 
