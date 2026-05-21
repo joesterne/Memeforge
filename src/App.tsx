@@ -22,7 +22,7 @@ export default function App() {
         <BrowserRouter>
           <div className="h-screen bg-slate-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 font-sans flex flex-col overflow-hidden transition-colors duration-300">
             <Navbar />
-            <main className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 overflow-y-auto">
+            <main id="main-scroll-container" className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 overflow-y-auto">
               <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-zinc-500">Loading...</div>}>
                 <Routes>
                   <Route path="/" element={<Home />} />
