@@ -236,6 +236,7 @@ export default function Editor() {
 
   useEffect(() => {
     // If it's an existing room (not template_), fetch from Firestore
+    if (!db || db.app.options.projectId === "MOCK") return;
     if (isRoom && id && id !== "new") {
       getDoc(doc(db, "memes", id))
         .then((snap) => {
@@ -636,6 +637,7 @@ export default function Editor() {
 
   const saveToFirebase = async () => {
     if (!user) return toast.error("Must be signed in to save!");
+    if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
     setSaving(true);
     try {
       const ref = doc(db, "memes", roomId!);

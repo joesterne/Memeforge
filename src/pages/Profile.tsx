@@ -17,6 +17,10 @@ export default function Profile() {
 
   useEffect(() => {
     if (!user) return;
+    if (!db || db.app.options.projectId === "MOCK") {
+      setLoading(false);
+      return;
+    }
     const fetchHistory = async () => {
       try {
         const q = query(

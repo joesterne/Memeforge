@@ -369,6 +369,11 @@ export default function Home() {
     }
 
     const fetchUserData = async () => {
+      if (!db || db.app.options.projectId === "MOCK") {
+        setMemesLoading(false);
+        setFavoritesLoading(false);
+        return;
+      }
       setMemesLoading(true);
       setFavoritesLoading(true);
       try {
