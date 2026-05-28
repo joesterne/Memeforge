@@ -813,17 +813,20 @@ export default function Editor() {
   };
 
   const renderScale =
-    Math.min(
-      (containerSize.width - 40) / logicalSize.width, // 40px padding
-      (containerSize.height - 40) / logicalSize.height,
-    ) || 1;
+    Math.max(
+      0.1,
+      Math.min(
+        Math.max(10, containerSize.width - 40) / logicalSize.width,
+        Math.max(10, containerSize.height - 40) / logicalSize.height,
+      )
+    );
 
   return (
     <>
-      <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-120px)] w-full pb-6">
+      <div className="flex flex-col md:flex-row gap-6 md:h-[calc(100vh-120px)] w-full pb-6">
         {/* Editor Main Canvas */}
         <div
-          className="flex-1 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden shadow-2xl flex flex-col justify-center items-center"
+          className="w-full h-[50vh] md:flex-1 md:h-auto md:min-h-0 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden shadow-2xl flex flex-col justify-center items-center"
           ref={containerRef}
         >
           {isBackgroundAnimatedGif && (uploadedImageUrl || template?.url) && (
