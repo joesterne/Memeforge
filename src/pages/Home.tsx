@@ -524,9 +524,7 @@ export default function Home() {
   }, [templates, deferredSearch, sortBy, recentIds, favorites]);
 
   const sortedAndFilteredGifs = useMemo(() => {
-    let result = gifs.filter((t) =>
-      t.name.toLowerCase().includes(deferredSearch.toLowerCase()),
-    );
+    let result = [...gifs];
 
     if (gifSortBy === "favorites") {
       const favoriteTemplates = Object.values(favorites)

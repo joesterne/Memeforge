@@ -19,6 +19,7 @@ import {
   Save,
   ImagePlus,
   Undo,
+  Copy,
   Trash2,
   ArrowUpToLine,
   ArrowDownToLine,
@@ -726,6 +727,23 @@ export default function Editor() {
     }
   };
 
+  const duplicateSelected = () => {
+    if (!selectedId) return;
+    const objToCopy = objects.find((o) => o.id === selectedId);
+    if (!objToCopy) return;
+
+    const newObj = {
+      ...objToCopy,
+      id: uuidv4(),
+      x: objToCopy.x + 20,
+      y: objToCopy.y + 20,
+    };
+    
+    const newObjs = [...objects, newObj];
+    emitUpdate(newObjs);
+    setSelectedId(newObj.id);
+  };
+
   const bringToFront = () => {
     if (!selectedId) return;
     const objIndex = objects.findIndex((o) => o.id === selectedId);
@@ -1208,6 +1226,12 @@ export default function Editor() {
                   className="flex items-center gap-2 justify-center py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all border border-white/5"
                 >
                   <ArrowDownToLine className="w-3 h-3" /> Back
+                </button>
+                <button
+                  onClick={duplicateSelected}
+                  className="flex items-center gap-2 justify-center py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-lg text-[10px] uppercase tracking-wider font-bold transition-all border border-white/5 col-span-2"
+                >
+                  <Copy className="w-3 h-3" /> Duplicate
                 </button>
               </div>
             </div>
