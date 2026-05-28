@@ -7,6 +7,7 @@ import {
   Text as KonvaText,
   Transformer,
   Rect,
+  Line,
 } from "react-konva";
 import useImage from "use-image";
 import { v4 as uuidv4 } from "uuid";
@@ -27,6 +28,7 @@ import {
   Camera,
   Sparkles,
   X,
+  Grid3X3,
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "../contexts/AuthContext";
@@ -60,8 +62,8 @@ interface CanvasObject {
 }
 
 const CanvasImage = memo(
-  ({ obj, setSelectedId, handleDragEnd, handleTransformEnd }: any) => {
-    const [img] = useImage(obj.url);
+  ({ obj, setSelectedId, handleDragEnd, handleTransformEnd, dragBoundFunc }: any) => {
+    const [img] = useImage(obj.url, "anonymous");
     const imageRef = useRef<any>(null);
     const handleSelect = useCallback(
       () => setSelectedId(obj.id),
@@ -90,6 +92,7 @@ const CanvasImage = memo(
         scaleY={obj.scaleY || 1}
         rotation={obj.rotation || 0}
         draggable={obj.draggable}
+        dragBoundFunc={dragBoundFunc}
         filters={filters}
         onClick={handleSelect}
         onTap={handleSelect}
@@ -108,6 +111,7 @@ const CanvasText = memo(
     handleDragEnd,
     handleTransformEnd,
     onDblClick,
+    dragBoundFunc,
   }: any) => {
     const handleSelect = useCallback(
       () => setSelectedId(obj.id),
@@ -127,6 +131,7 @@ const CanvasText = memo(
         strokeWidth={obj.strokeWidth ?? 2}
         dash={obj.dash}
         draggable={obj.draggable}
+        dragBoundFunc={dragBoundFunc}
         rotation={obj.rotation || 0}
         onClick={handleSelect}
         onTap={handleSelect}
@@ -187,9 +192,10 @@ export default function Editor() {
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
-  const [bgImage] = useImage(template?.url || "");
+  const [bgImage] = useImage(template?.url || "", "anonymous");
   const [isRoom, setIsRoom] = useState(!id?.startsWith("template_"));
   const [saving, setSaving] = useState(false);
+  const [isGridEnabled, setIsGridEnabled] = useState(false);
   const [isBackgroundAnimatedGif, setIsBackgroundAnimatedGif] = useState(
     template?.is_video || false,
   );
@@ -217,13 +223,13 @@ export default function Editor() {
   });
   const [logicalSize, setLogicalSize] = useState({ width: 800, height: 800 });
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
-  const [upImage] = useImage(uploadedImageUrl || "");
+  const [upImage] = useImage(uploadedImageUrl || "", "anonymous");
 
   useEffect(() => {
     if (bgImage) {
-      setLogicalSize({ width: bgImage.width, height: bgImage.height });
+      setLogicalSize({ width: bgImage.width || 800, height: bgImage.height || 800 });
     } else if (upImage) {
-      setLogicalSize({ width: upImage.width, height: upImage.height });
+      setLogicalSize({ width: upImage.width || 800, height: upImage.height || 800 });
     }
     const currentUrl = uploadedImageUrl || template?.url;
     setIsBackgroundAnimatedGif(
@@ -289,24 +295,44 @@ export default function Editor() {
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
-    const observer = new ResizeObserver((entries) => {
+    let windowTimeoutId: NodeJS.Timeout;
+    
+    const updateSize = (rectWidth?: number, rectHeight?: number) => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        if (entries[0] && entries[0].contentRect) {
+        if (rectWidth !== undefined && rectHeight !== undefined) {
+          setContainerSize({ width: rectWidth, height: rectHeight });
+        } else if (containerRef.current) {
           setContainerSize({
-            width: entries[0].contentRect.width,
-            height: entries[0].contentRect.height,
+            width: containerRef.current.clientWidth,
+            height: containerRef.current.clientHeight,
           });
         }
       }, 100);
+    }
+    
+    const observer = new ResizeObserver((entries) => {
+      if (entries[0] && entries[0].contentRect) {
+        updateSize(entries[0].contentRect.width, entries[0].contentRect.height);
+      }
     });
 
     if (containerRef.current) {
       observer.observe(containerRef.current);
     }
+    
+    const handleWindowResize = () => {
+      clearTimeout(windowTimeoutId);
+      windowTimeoutId = setTimeout(() => {
+        updateSize();
+      }, 100);
+    };
+    window.addEventListener("resize", handleWindowResize);
 
     return () => {
       clearTimeout(timeoutId);
+      clearTimeout(windowTimeoutId);
+      window.removeEventListener("resize", handleWindowResize);
       observer.disconnect();
     };
   }, []);
@@ -635,6 +661,32 @@ export default function Editor() {
     document.body.removeChild(link);
   };
 
+  const saveAsTemplateToFirebase = async () => {
+    if (!user) return toast.error("Must be signed in to save as template!");
+    if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
+    setSaving(true);
+    try {
+      const newTemplateId = uuidv4();
+      const ref = doc(db, "memes", newTemplateId);
+      await setDoc(
+        ref,
+        {
+          objects,
+          templateUrl: template?.url || uploadedImageUrl || null,
+          authorId: user.uid,
+          createdAt: new Date().toISOString(),
+          isTemplate: true,
+        }
+      );
+      setHasUnsavedChanges(false);
+      toast.success("Saved as new personal template!");
+      navigate(`/editor/${newTemplateId}`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `memes/${newTemplateId}`);
+    }
+    setSaving(false);
+  };
+
   const saveToFirebase = async () => {
     if (!user) return toast.error("Must be signed in to save!");
     if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
@@ -812,28 +864,44 @@ export default function Editor() {
     }, 0);
   };
 
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  const stageWidth = isMobile ? window.innerWidth - 48 : containerSize.width - 40;
+  const stageHeight = isMobile ? window.innerHeight * 0.45 : containerSize.height - 40;
+
   const renderScale =
     Math.max(
       0.1,
       Math.min(
-        Math.max(10, containerSize.width - 40) / logicalSize.width,
-        Math.max(10, containerSize.height - 40) / logicalSize.height,
+        Math.max(10, stageWidth) / logicalSize.width,
+        Math.max(10, stageHeight) / logicalSize.height,
       )
     );
+
+  const dragBoundFunc = useCallback(
+    (pos: any) => {
+      if (!isGridEnabled) return pos;
+      const SNAP_SIZE = 20;
+      return {
+        x: Math.round(pos.x / renderScale / SNAP_SIZE) * SNAP_SIZE * renderScale,
+        y: Math.round(pos.y / renderScale / SNAP_SIZE) * SNAP_SIZE * renderScale,
+      };
+    },
+    [isGridEnabled, renderScale]
+  );
 
   return (
     <>
       <div className="flex flex-col md:flex-row gap-6 md:h-[calc(100vh-120px)] w-full pb-6">
         {/* Editor Main Canvas */}
         <div
-          className="w-full h-[50vh] md:flex-1 md:h-auto md:min-h-0 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden shadow-2xl flex flex-col justify-center items-center"
+          className="w-full aspect-square md:aspect-auto md:h-full md:flex-[2] bg-zinc-900 border border-white/10 rounded-3xl relative flex flex-col justify-center items-center"
           ref={containerRef}
         >
           {isBackgroundAnimatedGif && (uploadedImageUrl || template?.url) && (
             <img
               src={uploadedImageUrl || template?.url}
               alt="Background GIF"
-              className="absolute object-contain pointer-events-none"
+              className="absolute object-contain pointer-events-none top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{
                 width: logicalSize.width * renderScale,
                 height: logicalSize.height * renderScale,
@@ -877,6 +945,50 @@ export default function Editor() {
                 />
               )}
 
+              {/* Grid Layout (if enabled) */}
+              {isGridEnabled && (
+                  (() => {
+                    const lines = [];
+                    const SNAP_SIZE = 20;
+                    const strokeColor = isBackgroundAnimatedGif ? "rgba(255, 255, 255, 0.4)" : "rgba(0, 0, 0, 0.2)";
+                    for (let i = 1; i < logicalSize.width / SNAP_SIZE; i++) {
+                      lines.push(
+                        <Line
+                          key={`v-${i}`}
+                          points={[
+                            Math.round(i * SNAP_SIZE),
+                            0,
+                            Math.round(i * SNAP_SIZE),
+                            logicalSize.height,
+                          ]}
+                          stroke={strokeColor}
+                          strokeWidth={1 / renderScale}
+                          dash={[5, 5]}
+                          listening={false}
+                        />
+                      );
+                    }
+                    for (let j = 1; j < logicalSize.height / SNAP_SIZE; j++) {
+                      lines.push(
+                        <Line
+                          key={`h-${j}`}
+                          points={[
+                            0,
+                            Math.round(j * SNAP_SIZE),
+                            logicalSize.width,
+                            Math.round(j * SNAP_SIZE),
+                          ]}
+                          stroke={strokeColor}
+                          strokeWidth={1 / renderScale}
+                          dash={[5, 5]}
+                          listening={false}
+                        />
+                      );
+                    }
+                    return lines;
+                  })()
+              )}
+
               {/* Draggable Objects */}
               {objects.map((obj) => {
                 if (obj.type === "text") {
@@ -888,6 +1000,7 @@ export default function Editor() {
                       handleDragEnd={handleDragEnd}
                       handleTransformEnd={handleTransformEnd}
                       onDblClick={onTextDblClick}
+                      dragBoundFunc={dragBoundFunc}
                     />
                   );
                 } else if (obj.type === "image") {
@@ -898,6 +1011,7 @@ export default function Editor() {
                       setSelectedId={setSelectedId}
                       handleDragEnd={handleDragEnd}
                       handleTransformEnd={handleTransformEnd}
+                      dragBoundFunc={dragBoundFunc}
                     />
                   );
                 }
@@ -1000,12 +1114,22 @@ export default function Editor() {
                 </div>
               </div>
 
-              <button
-                onClick={addText}
-                className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5"
-              >
-                <Type className="w-4 h-4" /> Add Text
-              </button>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={addText}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5"
+                >
+                  <Type className="w-4 h-4" /> Text
+                </button>
+                <button
+                  onClick={() => setIsGridEnabled(!isGridEnabled)}
+                  className={`flex items-center gap-2 justify-center w-full py-3 rounded-xl font-bold transition-all border border-white/5 ${
+                    isGridEnabled ? "bg-indigo-600/30 text-indigo-400" : "bg-zinc-800 hover:bg-zinc-700 text-zinc-100"
+                  }`}
+                >
+                  <Grid3X3 className="w-4 h-4" /> Grid
+                </button>
+              </div>
 
               <label className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold cursor-pointer transition-all border border-white/5">
                 <ImageIcon className="w-4 h-4" /> Add Image
@@ -1159,48 +1283,99 @@ export default function Editor() {
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
-                        Fill
-                      </label>
-                      <input
-                        type="color"
-                        value={
-                          objects.find((o) => o.id === selectedId)?.fill ||
-                          "#ffffff"
-                        }
-                        onChange={(e) => {
-                          const newObjs = objects.map((o) =>
-                            o.id === selectedId
-                              ? { ...o, fill: e.target.value }
-                              : o,
-                          );
-                          emitUpdate(newObjs);
-                        }}
-                        className="w-full h-8 bg-zinc-950 border border-white/10 rounded-lg cursor-pointer p-0.5"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
-                        Stroke
-                      </label>
-                      <input
-                        type="color"
-                        value={
-                          objects.find((o) => o.id === selectedId)?.stroke ||
-                          "#000000"
-                        }
-                        onChange={(e) => {
-                          const newObjs = objects.map((o) =>
-                            o.id === selectedId
-                              ? { ...o, stroke: e.target.value }
-                              : o,
-                          );
-                          emitUpdate(newObjs);
-                        }}
-                        className="w-full h-8 bg-zinc-950 border border-white/10 rounded-lg cursor-pointer p-0.5"
-                      />
-                    </div>
+                    {(() => {
+                      const presets = ["#ffffff", "#000000", "#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6", "#a855f7", "#ec4899", "#94a3b8"];
+                      return (
+                        <>
+                          <div>
+                            <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
+                              Fill
+                            </label>
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center gap-2 bg-zinc-950 border border-white/10 rounded-lg p-1">
+                                <input
+                                  type="color"
+                                  value={
+                                    objects.find((o) => o.id === selectedId)?.fill ||
+                                    "#ffffff"
+                                  }
+                                  onChange={(e) => {
+                                    const newObjs = objects.map((o) =>
+                                      o.id === selectedId
+                                        ? { ...o, fill: e.target.value }
+                                        : o,
+                                    );
+                                    emitUpdate(newObjs);
+                                  }}
+                                  className="w-6 h-6 rounded shrink-0 cursor-pointer p-0 border-0 bg-transparent"
+                                />
+                                <span className="text-xs text-zinc-400 font-mono uppercase truncate">
+                                  {objects.find((o) => o.id === selectedId)?.fill || "#ffffff"}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {presets.map((c) => (
+                                  <button
+                                    key={c}
+                                    onClick={() => {
+                                      const newObjs = objects.map((o) =>
+                                        o.id === selectedId ? { ...o, fill: c } : o
+                                      );
+                                      emitUpdate(newObjs);
+                                    }}
+                                    className="w-4 h-4 rounded-full border border-white/20 shadow-sm cursor-pointer hover:scale-125 transition-transform"
+                                    style={{ backgroundColor: c }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
+                              Stroke
+                            </label>
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center gap-2 bg-zinc-950 border border-white/10 rounded-lg p-1">
+                                <input
+                                  type="color"
+                                  value={
+                                    objects.find((o) => o.id === selectedId)?.stroke ||
+                                    "#000000"
+                                  }
+                                  onChange={(e) => {
+                                    const newObjs = objects.map((o) =>
+                                      o.id === selectedId
+                                        ? { ...o, stroke: e.target.value }
+                                        : o,
+                                    );
+                                    emitUpdate(newObjs);
+                                  }}
+                                  className="w-6 h-6 rounded shrink-0 cursor-pointer p-0 border-0 bg-transparent"
+                                />
+                                <span className="text-xs text-zinc-400 font-mono uppercase truncate">
+                                  {objects.find((o) => o.id === selectedId)?.stroke || "#000000"}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {presets.map((c) => (
+                                  <button
+                                    key={c}
+                                    onClick={() => {
+                                      const newObjs = objects.map((o) =>
+                                        o.id === selectedId ? { ...o, stroke: c } : o
+                                      );
+                                      emitUpdate(newObjs);
+                                    }}
+                                    className="w-4 h-4 rounded-full border border-white/20 shadow-sm cursor-pointer hover:scale-125 transition-transform"
+                                    style={{ backgroundColor: c }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                   <div>
                     <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
@@ -1417,14 +1592,24 @@ export default function Editor() {
               Export & Sync
             </h3>
             <div className="flex flex-col gap-3">
-              <button
-                onClick={saveToFirebase}
-                disabled={saving}
-                className="flex items-center gap-2 justify-center w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)]"
-              >
-                <Save className="w-4 h-4" />{" "}
-                {saving ? "Saving..." : "Save to History"}
-              </button>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={saveToFirebase}
+                  disabled={saving}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] text-xs"
+                >
+                  <Save className="w-4 h-4" />{" "}
+                  {saving ? "Saving..." : "Save History"}
+                </button>
+                <button
+                  onClick={saveAsTemplateToFirebase}
+                  disabled={saving}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl font-bold transition-all border border-white/5 text-xs"
+                >
+                  <ImagePlus className="w-4 h-4" />
+                  Save as Template
+                </button>
+              </div>
 
               <button
                 onClick={exportMeme}
