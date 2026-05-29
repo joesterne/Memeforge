@@ -19,6 +19,7 @@ import {
   Save,
   ImagePlus,
   Undo,
+  Redo,
   Copy,
   Trash2,
   ArrowUpToLine,
@@ -30,6 +31,9 @@ import {
   Sparkles,
   X,
   Grid3X3,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "../contexts/AuthContext";
@@ -191,12 +195,26 @@ export default function Editor() {
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [objects, setObjects] = useState<CanvasObject[]>([]);
+  const objectsRef = useRef<CanvasObject[]>([]);
+  const [history, setHistory] = useState<CanvasObject[][]>([[]]);
+  const [historyStep, setHistoryStep] = useState(0);
+  const historyStepRef = useRef(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    objectsRef.current = objects;
+  }, [objects]);
+
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
+  const [roomId] = useState(() => (id && id !== "new" && !id.startsWith("template_")) ? id : uuidv4());
   const [bgImage] = useImage(template?.url || "", "anonymous");
   const [isRoom, setIsRoom] = useState(!id?.startsWith("template_"));
   const [saving, setSaving] = useState(false);
   const [isGridEnabled, setIsGridEnabled] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState<number | "fit">("fit");
+  const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+  const lastCenterRef = useRef<{ x: number; y: number } | null>(null);
+  const lastDistRef = useRef<number>(0);
   const [isBackgroundAnimatedGif, setIsBackgroundAnimatedGif] = useState(
     template?.is_video || false,
   );
@@ -214,6 +232,42 @@ export default function Editor() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const markDirty = useCallback(() => setHasUnsavedChanges(true), []);
+
+  const pushToHistory = useCallback((newObjects: CanvasObject[]) => {
+    setHistory((prev) => {
+      const upToCurrent = prev.slice(0, historyStepRef.current + 1);
+      return [...upToCurrent, newObjects];
+    });
+    setHistoryStep((prev) => {
+      const next = prev + 1;
+      historyStepRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    if (historyStepRef.current > 0) {
+      const prevStep = historyStepRef.current - 1;
+      const previousState = history[prevStep];
+      setObjects(previousState);
+      setHistoryStep(prevStep);
+      historyStepRef.current = prevStep;
+      if (socket) socket.emit("canvas-update", roomId, previousState);
+      markDirty();
+    }
+  }, [history, socket, roomId, markDirty]);
+
+  const handleRedo = useCallback(() => {
+    if (historyStepRef.current < history.length - 1) {
+      const nextStep = historyStepRef.current + 1;
+      const nextState = history[nextStep];
+      setObjects(nextState);
+      setHistoryStep(nextStep);
+      historyStepRef.current = nextStep;
+      if (socket) socket.emit("canvas-update", roomId, nextState);
+      markDirty();
+    }
+  }, [history, socket, roomId, markDirty]);
 
   const stageRef = useRef<any>(null);
   const trRef = useRef<any>(null);
@@ -238,9 +292,6 @@ export default function Editor() {
     );
   }, [bgImage, upImage, uploadedImageUrl, template]);
 
-  // Derive initial ID or Room ID
-  const roomId = isRoom ? id : uuidv4();
-
   useEffect(() => {
     // If it's an existing room (not template_), fetch from Firestore
     if (!db || db.app.options.projectId === "MOCK") return;
@@ -249,7 +300,12 @@ export default function Editor() {
         .then((snap) => {
           if (snap.exists()) {
             const data = snap.data();
-            if (data.objects) setObjects(data.objects);
+            if (data.objects) {
+              setObjects(data.objects);
+              setHistory([data.objects]);
+              setHistoryStep(0);
+              historyStepRef.current = 0;
+            }
             if (data.templateUrl) setUploadedImageUrl(data.templateUrl);
           }
         })
@@ -279,6 +335,9 @@ export default function Editor() {
     s.on("room-state", (state: any) => {
       if (state.objects && state.objects.length > 0) {
         setObjects(state.objects);
+        setHistory([state.objects]);
+        setHistoryStep(0);
+        historyStepRef.current = 0;
       }
     });
 
@@ -338,38 +397,78 @@ export default function Editor() {
     };
   }, []);
 
+  // Auto-save logic
+  useEffect(() => {
+    // Only auto-save if signed in, not mocking, and there are actually unsaved changes
+    if (!user || (!db || db.app.options.projectId === "MOCK") || !hasUnsavedChanges) {
+      return; 
+    }
+
+    const timer = setTimeout(async () => {
+      setSaving(true);
+      try {
+        const ref = doc(db, "memes", roomId);
+        const snap = await getDoc(ref);
+        
+        // If it exists and user is not author, don't overwrite
+        if (snap.exists() && snap.data().authorId !== user.uid) {
+          setSaving(false);
+          return;
+        }
+
+        await setDoc(
+          ref,
+          {
+            objects,
+            templateUrl: template?.url || uploadedImageUrl || null,
+            authorId: snap.exists() ? snap.data().authorId : user.uid,
+            createdAt: snap.exists()
+              ? snap.data().createdAt
+              : new Date().toISOString(),
+          },
+          { merge: true },
+        );
+        setHasUnsavedChanges(false);
+      } catch (err) {
+         console.error("Auto-save failed:", err);
+      }
+      setSaving(false);
+    }, 2000); // 2 second delay of inactivity
+    
+    return () => clearTimeout(timer);
+  }, [objects, user, db, roomId, template?.url, uploadedImageUrl, hasUnsavedChanges]);
+
   const emitUpdate = useCallback(
-    (newObjects: CanvasObject[]) => {
+    (newObjects: CanvasObject[], skipHistory = false) => {
       setObjects(newObjects);
+      if (!skipHistory) {
+        pushToHistory(newObjects);
+      }
       markDirty();
       if (socket) {
         socket.emit("canvas-update", roomId, newObjects);
       }
     },
-    [socket, roomId, markDirty],
+    [socket, roomId, markDirty, pushToHistory],
   );
 
   const addText = useCallback(() => {
-    setObjects((prev) => {
-      const newObj: CanvasObject = {
-        id: uuidv4(),
-        type: "text",
-        x: logicalSize.width / 2 - 50,
-        y: logicalSize.height / 2 - 20,
-        text: "Double click to edit",
-        fontSize: 40,
-        fontFamily: "Impact, sans-serif",
-        fill: "#ffffff",
-        stroke: "#000000",
-        strokeWidth: 2,
-        draggable: true,
-      };
-      const newObjs = [...prev, newObj];
-      if (socket) socket.emit("canvas-update", roomId, newObjs);
-      markDirty();
-      return newObjs;
-    });
-  }, [logicalSize, socket, roomId, markDirty]);
+    const newObj: CanvasObject = {
+      id: uuidv4(),
+      type: "text",
+      x: logicalSize.width / 2 - 50,
+      y: logicalSize.height / 2 - 20,
+      text: "Double click to edit",
+      fontSize: 40,
+      fontFamily: "Impact, sans-serif",
+      fill: "#ffffff",
+      stroke: "#000000",
+      strokeWidth: 2,
+      draggable: true,
+    };
+    const newObjs = [...objectsRef.current, newObj];
+    emitUpdate(newObjs);
+  }, [logicalSize, emitUpdate]);
 
   const addImage = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -387,22 +486,18 @@ export default function Editor() {
           const compressedFile = await imageCompression(file, options);
           const reader = new FileReader();
           reader.onload = () => {
-            setObjects((prev) => {
-              const newObj: CanvasObject = {
-                id: uuidv4(),
-                type: "image",
-                url: reader.result as string,
-                x: logicalSize.width / 2 - 100,
-                y: logicalSize.height / 2 - 100,
-                scaleX: 1,
-                scaleY: 1,
-                draggable: true,
-              };
-              const newObjs = [...prev, newObj];
-              if (socket) socket.emit("canvas-update", roomId, newObjs);
-              markDirty();
-              return newObjs;
-            });
+            const newObj: CanvasObject = {
+              id: uuidv4(),
+              type: "image",
+              url: reader.result as string,
+              x: logicalSize.width / 2 - 100,
+              y: logicalSize.height / 2 - 100,
+              scaleX: 1,
+              scaleY: 1,
+              draggable: true,
+            };
+            const newObjs = [...objectsRef.current, newObj];
+            emitUpdate(newObjs);
           };
           reader.readAsDataURL(compressedFile);
         } catch (error) {
@@ -410,25 +505,21 @@ export default function Editor() {
         }
       }
     },
-    [logicalSize, socket, roomId, markDirty],
+    [logicalSize, emitUpdate],
   );
 
   const handleDragEnd = useCallback(
     (e: any) => {
       const id = e.target.id();
-      setObjects((prev) => {
-        const newObjs = prev.map((o) => {
-          if (o.id === id) {
-            return { ...o, x: e.target.x(), y: e.target.y() };
-          }
-          return o;
-        });
-        if (socket) socket.emit("canvas-update", roomId, newObjs);
-        markDirty();
-        return newObjs;
+      const newObjs = objectsRef.current.map((o) => {
+        if (o.id === id) {
+          return { ...o, x: e.target.x(), y: e.target.y() };
+        }
+        return o;
       });
+      emitUpdate(newObjs);
     },
-    [socket, roomId, markDirty],
+    [emitUpdate],
   );
 
   const handleTransformEnd = useCallback(() => {
@@ -437,33 +528,29 @@ export default function Editor() {
     const scaleX = node.scaleX();
     const scaleY = node.scaleY();
 
-    setObjects((prev) => {
-      const newObjs = prev.map((o) => {
-        if (o.id === selectedId) {
-          if (o.type === "text") {
-            node.scaleX(1);
-            node.scaleY(1);
-          }
-          return {
-            ...o,
-            x: node.x(),
-            y: node.y(),
-            rotation: node.rotation(),
-            scaleX: o.type === "text" ? 1 : scaleX,
-            scaleY: o.type === "text" ? 1 : scaleY,
-            fontSize:
-              o.type === "text" && o.fontSize
-                ? o.fontSize * Math.max(scaleX, scaleY)
-                : undefined,
-          };
+    const newObjs = objectsRef.current.map((o) => {
+      if (o.id === selectedId) {
+        if (o.type === "text") {
+          node.scaleX(1);
+          node.scaleY(1);
         }
-        return o;
-      });
-      if (socket) socket.emit("canvas-update", roomId, newObjs);
-      markDirty();
-      return newObjs;
+        return {
+          ...o,
+          x: node.x(),
+          y: node.y(),
+          rotation: node.rotation(),
+          scaleX: o.type === "text" ? 1 : scaleX,
+          scaleY: o.type === "text" ? 1 : scaleY,
+          fontSize:
+            o.type === "text" && o.fontSize
+              ? o.fontSize * Math.max(scaleX, scaleY)
+              : undefined,
+        };
+      }
+      return o;
     });
-  }, [selectedId, socket, roomId, markDirty]);
+    emitUpdate(newObjs);
+  }, [selectedId, emitUpdate]);
 
   const deselect = (e: any) => {
     const clickedOnEmpty =
@@ -666,8 +753,8 @@ export default function Editor() {
     if (!user) return toast.error("Must be signed in to save as template!");
     if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
     setSaving(true);
+    const newTemplateId = uuidv4();
     try {
-      const newTemplateId = uuidv4();
       const ref = doc(db, "memes", newTemplateId);
       await setDoc(
         ref,
@@ -882,18 +969,59 @@ export default function Editor() {
     }, 0);
   };
 
-  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
-  const stageWidth = isMobile ? window.innerWidth - 48 : containerSize.width - 40;
-  const stageHeight = isMobile ? window.innerHeight * 0.45 : containerSize.height - 40;
+  const fitScale = Math.max(
+    0.1,
+    Math.min(
+      Math.max(10, containerSize.width - 40) / logicalSize.width,
+      Math.max(10, containerSize.height - 40) / logicalSize.height,
+    ),
+  );
 
-  const renderScale =
-    Math.max(
-      0.1,
-      Math.min(
-        Math.max(10, stageWidth) / logicalSize.width,
-        Math.max(10, stageHeight) / logicalSize.height,
-      )
-    );
+  const renderScale = zoomLevel === "fit" ? fitScale : zoomLevel;
+
+  const currentStagePos =
+    zoomLevel === "fit"
+      ? {
+          x: (containerSize.width - logicalSize.width * fitScale) / 2,
+          y: (containerSize.height - logicalSize.height * fitScale) / 2,
+        }
+      : stagePos;
+
+  const handleZoom = useCallback(
+    (newZoom: number | "fit", center?: { x: number; y: number }) => {
+      if (newZoom === "fit") {
+        setZoomLevel("fit");
+        return;
+      }
+      const oldScale = zoomLevel === "fit" ? fitScale : zoomLevel;
+      const oldPos =
+        zoomLevel === "fit"
+          ? {
+              x: (containerSize.width - logicalSize.width * fitScale) / 2,
+              y: (containerSize.height - logicalSize.height * fitScale) / 2,
+            }
+          : stagePos;
+
+      const zoomCenter = center || {
+        x: containerSize.width / 2,
+        y: containerSize.height / 2,
+      };
+
+      const pointTo = {
+        x: (zoomCenter.x - oldPos.x) / oldScale,
+        y: (zoomCenter.y - oldPos.y) / oldScale,
+      };
+
+      const newPos = {
+        x: zoomCenter.x - pointTo.x * newZoom,
+        y: zoomCenter.y - pointTo.y * newZoom,
+      };
+
+      setStagePos(newPos);
+      setZoomLevel(newZoom);
+    },
+    [zoomLevel, fitScale, containerSize, logicalSize, stagePos],
+  );
 
   const dragBoundFunc = useCallback(
     (pos: any) => {
@@ -912,37 +1040,129 @@ export default function Editor() {
       <div className="flex flex-col md:flex-row gap-6 md:h-[calc(100vh-120px)] w-full pb-6">
         {/* Editor Main Canvas */}
         <div
-          className="w-full aspect-square md:aspect-auto md:h-full md:flex-[2] bg-zinc-900 border border-white/10 rounded-3xl relative flex flex-col justify-center items-center"
+          className="w-full aspect-square md:aspect-auto md:h-full md:flex-[2] bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden"
           ref={containerRef}
         >
-          {isBackgroundAnimatedGif && (uploadedImageUrl || template?.url) && (
-            <img
-              src={uploadedImageUrl || template?.url}
-              alt="Background GIF"
-              className="absolute object-contain pointer-events-none top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-              style={{
-                width: logicalSize.width * renderScale,
-                height: logicalSize.height * renderScale,
-              }}
-            />
-          )}
+          {/* Zoom Controls */}
+          <div className="absolute top-4 right-4 z-20 flex bg-black/60 rounded-xl backdrop-blur-md overflow-hidden border border-white/10">
+            <button
+              onClick={() => handleZoom(Math.max(0.1, renderScale - 0.1))}
+              className="p-2 text-white hover:bg-white/20 transition-all"
+              title="Zoom Out"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleZoom("fit")}
+              className={`px-3 text-xs font-bold transition-all border-l border-r border-white/10 ${
+                zoomLevel === "fit" ? "text-indigo-400 bg-white/10" : "text-white hover:bg-white/20"
+              }`}
+              title="Zoom to Fit"
+            >
+              {zoomLevel === "fit" ? "FIT" : `${Math.round(renderScale * 100)}%`}
+            </button>
+            <button
+              onClick={() => handleZoom(Math.min(5, renderScale + 0.1))}
+              className="p-2 text-white hover:bg-white/20 transition-all"
+              title="Zoom In"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+          </div>
+
           <button
             onClick={() =>
               hasUnsavedChanges ? setShowCloseModal(true) : navigate("/")
             }
-            className="absolute top-4 left-4 z-10 p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-all"
+            className="absolute top-4 left-4 z-20 p-2 bg-black/50 hover:bg-black/80 rounded-full text-white backdrop-blur-md transition-all"
           >
             <X className="w-5 h-5" />
           </button>
 
-          <Stage
-            width={logicalSize.width * renderScale}
-            height={logicalSize.height * renderScale}
-            scale={{ x: renderScale, y: renderScale }}
-            onMouseDown={deselect}
-            onTouchStart={deselect}
-            ref={stageRef}
-          >
+          <div className="w-full h-full relative" style={{ touchAction: "none" }}>
+            {isBackgroundAnimatedGif && (uploadedImageUrl || template?.url) && (
+              <img
+                src={uploadedImageUrl || template?.url}
+                alt="Background GIF"
+                className="absolute pointer-events-none"
+                style={{
+                  width: logicalSize.width * renderScale,
+                  height: logicalSize.height * renderScale,
+                  left: currentStagePos.x,
+                  top: currentStagePos.y,
+                }}
+              />
+            )}
+
+            <Stage
+              width={containerSize.width}
+              height={containerSize.height}
+              scale={{ x: renderScale, y: renderScale }}
+              x={currentStagePos.x}
+              y={currentStagePos.y}
+              draggable={zoomLevel !== "fit"}
+              onDragStart={(e) => {
+                if (e.target === e.target.getStage()) {
+                  // Stage drag
+                }
+              }}
+              onDragEnd={(e) => {
+                if (e.target === e.target.getStage()) {
+                  setStagePos({ x: e.target.x(), y: e.target.y() });
+                }
+              }}
+              onWheel={(e) => {
+                e.evt.preventDefault();
+                const direction = e.evt.deltaY > 0 ? -1 : 1;
+                const scaleBy = 1.1;
+                let newScale = direction > 0 ? renderScale * scaleBy : renderScale / scaleBy;
+                newScale = Math.max(0.1, Math.min(newScale, 5));
+                handleZoom(newScale, e.target.getStage()?.getPointerPosition() || undefined);
+              }}
+              onTouchMove={(e) => {
+                const touch1 = e.evt.touches?.[0];
+                const touch2 = e.evt.touches?.[1];
+
+                if (touch1 && touch2) {
+                  e.evt.preventDefault();
+                  const stage = e.target.getStage();
+                  if (!stage) return;
+
+                  if (stage.isDragging()) {
+                    stage.stopDrag();
+                  }
+
+                  const p1 = { x: touch1.clientX, y: touch1.clientY };
+                  const p2 = { x: touch2.clientX, y: touch2.clientY };
+
+                  const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+
+                  if (!lastDistRef.current) {
+                    lastDistRef.current = dist;
+                  }
+
+                  const scale = renderScale * (dist / lastDistRef.current);
+                  const newScale = Math.max(0.1, Math.min(scale, 5));
+
+                  const rect = containerRef.current?.getBoundingClientRect();
+                  if (!rect) return;
+
+                  const center = {
+                    x: (p1.x + p2.x) / 2 - rect.left,
+                    y: (p1.y + p2.y) / 2 - rect.top,
+                  };
+
+                  handleZoom(newScale, center);
+                  lastDistRef.current = dist;
+                }
+              }}
+              onTouchEnd={() => {
+                lastDistRef.current = 0;
+              }}
+              onMouseDown={deselect}
+              onTouchStart={deselect}
+              ref={stageRef}
+            >
             <Layer>
               {/* Background */}
               {bgImage || upImage ? (
@@ -1085,6 +1305,7 @@ export default function Editor() {
               )}
             </Layer>
           </Stage>
+          </div>
         </div>
 
         {/* Sidebar Tooling */}
@@ -1133,6 +1354,24 @@ export default function Editor() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                <div className="flex gap-2 w-full col-span-2">
+                  <button
+                    onClick={handleUndo}
+                    disabled={historyStepRef.current <= 0}
+                    className="flex-1 flex items-center justify-center py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Undo"
+                  >
+                    <Undo className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleRedo}
+                    disabled={historyStepRef.current >= history.length - 1 || history.length === 0}
+                    className="flex-1 flex items-center justify-center py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Redo"
+                  >
+                    <Redo className="w-4 h-4" />
+                  </button>
+                </div>
                 <button
                   onClick={addText}
                   className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5"
@@ -1619,11 +1858,11 @@ export default function Editor() {
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={saveToFirebase}
-                  disabled={saving}
-                  className="flex items-center gap-2 justify-center w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] text-xs"
+                  disabled={saving || !hasUnsavedChanges}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] text-xs disabled:opacity-50"
                 >
                   <Save className="w-4 h-4" />{" "}
-                  {saving ? "Saving..." : "Save History"}
+                  {saving ? "Saving..." : "Save Now"}
                 </button>
                 <button
                   onClick={saveAsTemplateToFirebase}
@@ -1631,7 +1870,7 @@ export default function Editor() {
                   className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl font-bold transition-all border border-white/5 text-xs"
                 >
                   <ImagePlus className="w-4 h-4" />
-                  Save as Template
+                  Template
                 </button>
               </div>
 
