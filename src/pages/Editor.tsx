@@ -222,6 +222,8 @@ export default function Editor() {
     "image/png" | "image/jpeg" | "image/gif"
   >(template?.is_video ? "image/gif" : "image/png");
   const [exportScale, setExportScale] = useState<number>(1);
+  const [exportQuality, setExportQuality] = useState<number>(0.9);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [watermark, setWatermark] = useState({
     enabled: false,
@@ -618,7 +620,7 @@ export default function Editor() {
     }
   };
 
-  const exportMeme = async () => {
+  const exportMeme = async (overrideFormat?: string) => {
     // clear selection first
     setSelectedId(null);
     setSaving(true);
@@ -626,7 +628,9 @@ export default function Editor() {
     // Give react complete cycle to remove selection
     await new Promise((r) => setTimeout(r, 100));
 
-    if (exportFormat === "image/gif") {
+    const finalFormat = overrideFormat || exportFormat;
+
+    if (finalFormat === "image/gif") {
       try {
         const bgUrl = uploadedImageUrl || template?.url;
         if (!bgUrl) throw new Error("No background GIF to export");
@@ -717,11 +721,11 @@ export default function Editor() {
     } else {
       const uri = stageRef.current.toDataURL({
         pixelRatio: exportScale / renderScale,
-        mimeType: exportFormat,
-        quality: exportFormat === "image/jpeg" ? 0.9 : undefined,
+        mimeType: finalFormat,
+        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
       });
       const link = document.createElement("a");
-      link.download = `meme-${roomId}.${exportFormat === "image/png" ? "png" : "jpg"}`;
+      link.download = `meme-${roomId}.${finalFormat === "image/png" ? "png" : "jpg"}`;
       link.href = uri;
       document.body.appendChild(link);
       link.click();
@@ -739,7 +743,7 @@ export default function Editor() {
     const uri = node.toDataURL({
       mimeType: exportFormat,
       pixelRatio: exportScale,
-      quality: exportFormat === "image/jpeg" ? 0.9 : undefined,
+      quality: exportFormat === "image/jpeg" ? exportQuality : undefined,
     });
     const link = document.createElement("a");
     link.download = `exported-image-${selectedId}.${exportFormat === "image/png" ? "png" : "jpg"}`;
@@ -1034,6 +1038,46 @@ export default function Editor() {
     },
     [isGridEnabled, renderScale]
   );
+
+  const exportMemeRef = useRef(exportMeme);
+  const handleUndoRef = useRef(handleUndo);
+  const handleRedoRef = useRef(handleRedo);
+
+  useEffect(() => {
+    exportMemeRef.current = exportMeme;
+    handleUndoRef.current = handleUndo;
+    handleRedoRef.current = handleRedo;
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+      if (cmdOrCtrl && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedoRef.current();
+        } else {
+          handleUndoRef.current();
+        }
+      } else if (cmdOrCtrl && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        setShowExportModal(true);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
     <>
@@ -1874,12 +1918,14 @@ export default function Editor() {
                 </button>
               </div>
 
-              <button
-                onClick={exportMeme}
-                className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-100 hover:bg-white text-zinc-900 rounded-xl font-bold transition-all shadow-lg"
-              >
-                <Download className="w-4 h-4" /> Export Image
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-100 hover:bg-white text-zinc-900 rounded-xl font-bold transition-all shadow-lg"
+                >
+                  <Download className="w-4 h-4" /> Export Configuration
+                </button>
+              </div>
 
               <button
                 onClick={() => {
@@ -1938,41 +1984,17 @@ export default function Editor() {
               Unsaved Changes
             </h2>
             <p className="text-sm text-zinc-400 mb-6">
-              You have unsaved changes. Do you want to export or save to cloud
-              before leaving?
+              You have unsaved changes. Do you want to save to cloud before leaving?
             </p>
 
             <div className="flex flex-col gap-3">
-              <div className="flex gap-2">
-                <select
-                  value={exportFormat}
-                  onChange={(e) => setExportFormat(e.target.value as any)}
-                  className="flex-1 bg-zinc-950 border border-white/10 rounded-xl p-2 text-sm text-white appearance-none"
-                >
-                  <option value="image/png">PNG</option>
-                  <option value="image/jpeg">JPEG</option>
-                  {isBackgroundAnimatedGif && (
-                    <option value="image/gif">GIF (Animated)</option>
-                  )}
-                </select>
-                <button
-                  onClick={async () => {
-                    await exportMeme();
-                    navigate("/");
-                  }}
-                  className="flex-[2] py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all text-sm"
-                >
-                  Export
-                </button>
-              </div>
-
               {user && (
                 <button
                   onClick={async () => {
                     await saveToFirebase();
                     navigate("/");
                   }}
-                  className="w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold transition-all text-sm border border-white/5"
+                  className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all text-sm"
                 >
                   Save to Cloud
                 </button>
@@ -1990,6 +2012,85 @@ export default function Editor() {
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-white/10 p-6 rounded-2xl w-full max-w-sm shadow-2xl">
+            <h2 className="text-xl font-bold text-white mb-4">
+              Export Configuration
+            </h2>
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="text-xs text-zinc-400 uppercase font-bold mb-2 block">
+                  File Format
+                </label>
+                <select
+                  value={exportFormat}
+                  onChange={(e) => setExportFormat(e.target.value as any)}
+                  className="w-full bg-zinc-950 border border-white/10 rounded-xl p-3 text-sm text-white appearance-none"
+                >
+                  <option value="image/png">PNG (Lossless image)</option>
+                  <option value="image/jpeg">JPG (Compressed image)</option>
+                  {isBackgroundAnimatedGif && (
+                    <option value="image/gif">GIF (Animated image)</option>
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs text-zinc-400 uppercase font-bold mb-2 block">
+                  Resolution Scale: {exportScale}x
+                </label>
+                <select
+                  value={exportScale}
+                  onChange={(e) => setExportScale(Number(e.target.value))}
+                  className="w-full bg-zinc-950 border border-white/10 rounded-xl p-3 text-sm text-white appearance-none"
+                >
+                  <option value={1}>1x (Original Size)</option>
+                  <option value={2}>2x (High Quality)</option>
+                  <option value={3}>3x (Ultra HD)</option>
+                </select>
+              </div>
+
+              {exportFormat === "image/jpeg" && (
+                <div>
+                  <label className="text-xs text-zinc-400 uppercase font-bold flex justify-between mb-2">
+                    <span>JPEG Quality</span>
+                    <span>{Math.round(exportQuality * 100)}%</span>
+                  </label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.1"
+                    value={exportQuality}
+                    onChange={(e) => setExportQuality(parseFloat(e.target.value))}
+                    className="w-full h-2 mt-2 accent-indigo-500 bg-zinc-950 border border-white/10 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-col gap-2">
+                <button
+                  onClick={async () => {
+                    setShowExportModal(false);
+                    await exportMeme();
+                  }}
+                  className="flex font-bold items-center justify-center gap-2 w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)]"
+                >
+                  <Download className="w-4 h-4" /> Download Meme
+                </button>
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="w-full py-3 bg-transparent hover:bg-white/5 text-zinc-400 rounded-xl font-bold transition-all text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>
