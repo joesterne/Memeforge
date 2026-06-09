@@ -34,6 +34,7 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
+  CloudUpload
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "../contexts/AuthContext";
@@ -46,145 +47,8 @@ import {
 import { toast } from "sonner";
 import Konva from "konva";
 
-interface CanvasObject {
-  id: string;
-  type: "text" | "image";
-  x: number;
-  y: number;
-  text?: string;
-  url?: string;
-  fontSize?: number;
-  fontFamily?: string;
-  fill?: string;
-  stroke?: string;
-  strokeWidth?: number;
-  draggable: boolean;
-  scaleX?: number;
-  scaleY?: number;
-  rotation?: number;
-  dash?: number[];
-  filter?: "none" | "grayscale" | "sepia" | "invert";
-}
-
-const CanvasImage = memo(
-  ({ obj, setSelectedId, handleDragEnd, handleTransformEnd, dragBoundFunc }: any) => {
-    const [img] = useImage(obj.url, "anonymous");
-    const imageRef = useRef<any>(null);
-    const handleSelect = useCallback(
-      () => setSelectedId(obj.id),
-      [setSelectedId, obj.id],
-    );
-
-    useEffect(() => {
-      if (img && imageRef.current) {
-        imageRef.current.cache();
-      }
-    }, [img, obj.filter, obj.scaleX, obj.scaleY, obj.rotation]);
-
-    let filters = [];
-    if (obj.filter === "grayscale") filters.push(Konva.Filters.Grayscale);
-    if (obj.filter === "sepia") filters.push(Konva.Filters.Sepia);
-    if (obj.filter === "invert") filters.push(Konva.Filters.Invert);
-
-    return (
-      <KonvaImage
-        ref={imageRef}
-        id={obj.id}
-        image={img}
-        x={obj.x}
-        y={obj.y}
-        scaleX={obj.scaleX || 1}
-        scaleY={obj.scaleY || 1}
-        rotation={obj.rotation || 0}
-        draggable={obj.draggable}
-        dragBoundFunc={dragBoundFunc}
-        filters={filters}
-        onClick={handleSelect}
-        onTap={handleSelect}
-        onDragEnd={handleDragEnd}
-        onTransformEnd={handleTransformEnd}
-      />
-    );
-  },
-);
-CanvasImage.displayName = "CanvasImage";
-
-const CanvasText = memo(
-  ({
-    obj,
-    setSelectedId,
-    handleDragEnd,
-    handleTransformEnd,
-    onDblClick,
-    dragBoundFunc,
-  }: any) => {
-    const handleSelect = useCallback(
-      () => setSelectedId(obj.id),
-      [setSelectedId, obj.id],
-    );
-
-    return (
-      <KonvaText
-        id={obj.id}
-        text={obj.text}
-        x={obj.x}
-        y={obj.y}
-        fontSize={obj.fontSize}
-        fontFamily={obj.fontFamily}
-        fill={obj.fill}
-        stroke={obj.stroke || "black"}
-        strokeWidth={obj.strokeWidth ?? 2}
-        dash={obj.dash}
-        draggable={obj.draggable}
-        dragBoundFunc={dragBoundFunc}
-        rotation={obj.rotation || 0}
-        onClick={handleSelect}
-        onTap={handleSelect}
-        onDragEnd={handleDragEnd}
-        onTransformEnd={handleTransformEnd}
-        onDblClick={onDblClick}
-        onDblTap={onDblClick}
-      />
-    );
-  },
-);
-CanvasText.displayName = "CanvasText";
-
-const AIPromptInput = memo(
-  ({
-    onGenerate,
-    generatingAI,
-  }: {
-    onGenerate: (prompt: string) => void;
-    generatingAI: boolean;
-  }) => {
-    const [aiPrompt, setAiPrompt] = useState("");
-    return (
-      <div className="flex gap-2">
-        <input
-          type="text"
-          placeholder="Generate AI relative to..."
-          value={aiPrompt}
-          onChange={(e) => setAiPrompt(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && onGenerate(aiPrompt)}
-          className="w-full bg-zinc-950 border border-white/10 rounded-xl p-3 text-sm text-white appearance-none"
-        />
-        <button
-          onClick={() => onGenerate(aiPrompt)}
-          disabled={generatingAI || !aiPrompt}
-          className="flex items-center justify-center px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all disabled:opacity-50"
-        >
-          {generatingAI ? (
-            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          ) : (
-            <Sparkles className="w-5 h-5" />
-          )}
-        </button>
-      </div>
-    );
-  },
-);
-AIPromptInput.displayName = "AIPromptInput";
+import type { CanvasObject } from "../types/canvas";
+import { CanvasImage, CanvasText, AIPromptInput } from "../components/editor/CanvasElements";
 
 export default function Editor() {
   const { id } = useParams();
@@ -441,13 +305,13 @@ export default function Editor() {
   }, [objects, user, db, roomId, template?.url, uploadedImageUrl, hasUnsavedChanges]);
 
   const emitUpdate = useCallback(
-    (newObjects: CanvasObject[], skipHistory = false) => {
+    (newObjects: CanvasObject[], skipHistory = false, skipSocket = false) => {
       setObjects(newObjects);
       if (!skipHistory) {
         pushToHistory(newObjects);
       }
       markDirty();
-      if (socket) {
+      if (socket && !skipSocket) {
         socket.emit("canvas-update", roomId, newObjects);
       }
     },
@@ -751,6 +615,48 @@ export default function Editor() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const submitMemeToDatabase = async () => {
+    if (!user) return toast.error("Must be signed in to submit!");
+    if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
+    
+    // clear selection first
+    setSelectedId(null);
+    setSaving(true);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const finalFormat = exportFormat === "image/gif" ? "image/png" : exportFormat; // fallback since dataurls for GIF are hard
+
+    let uri = "";
+    if (exportFormat === "image/gif") {
+      uri = stageRef.current.toDataURL({
+        pixelRatio: exportScale / renderScale,
+        mimeType: "image/png",
+      });
+    } else {
+      uri = stageRef.current.toDataURL({
+        pixelRatio: exportScale / renderScale,
+        mimeType: finalFormat,
+        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
+      });
+    }
+
+    const docId = uuidv4();
+    try {
+      const ref = doc(db, "submissions", docId);
+      await setDoc(ref, {
+        userId: user.uid,
+        imageUrl: uri,
+        createdAt: new Date().toISOString(),
+      });
+      toast.success("Meme submitted to the database successfully!");
+    } catch (e: any) {
+      console.error(e);
+      handleFirestoreError(e, OperationType.WRITE, `submissions/${docId}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const saveAsTemplateToFirebase = async () => {
@@ -1584,8 +1490,9 @@ export default function Editor() {
                             ? { ...o, fontSize: Number(e.target.value) }
                             : o,
                         );
-                        emitUpdate(newObjs);
+                        emitUpdate(newObjs, true, true);
                       }}
+                      onPointerUp={() => emitUpdate(objects)}
                       className="w-full accent-indigo-500 bg-zinc-950 border border-white/10 rounded-lg appearance-none h-2 cursor-pointer"
                     />
                   </div>
@@ -1612,8 +1519,9 @@ export default function Editor() {
                                         ? { ...o, fill: e.target.value }
                                         : o,
                                     );
-                                    emitUpdate(newObjs);
+                                    emitUpdate(newObjs, true, true);
                                   }}
+                                  onBlur={() => emitUpdate(objects)}
                                   className="w-6 h-6 rounded shrink-0 cursor-pointer p-0 border-0 bg-transparent"
                                 />
                                 <span className="text-xs text-zinc-400 font-mono uppercase truncate">
@@ -1655,8 +1563,9 @@ export default function Editor() {
                                         ? { ...o, stroke: e.target.value }
                                         : o,
                                     );
-                                    emitUpdate(newObjs);
+                                    emitUpdate(newObjs, true, true);
                                   }}
+                                  onBlur={() => emitUpdate(objects)}
                                   className="w-6 h-6 rounded shrink-0 cursor-pointer p-0 border-0 bg-transparent"
                                 />
                                 <span className="text-xs text-zinc-400 font-mono uppercase truncate">
@@ -1704,8 +1613,9 @@ export default function Editor() {
                             ? { ...o, strokeWidth: parseInt(e.target.value) }
                             : o,
                         );
-                        emitUpdate(newObjs);
+                        emitUpdate(newObjs, true, true);
                       }}
+                      onPointerUp={() => emitUpdate(objects)}
                       className="w-full accent-indigo-500"
                     />
                   </div>
@@ -1727,8 +1637,9 @@ export default function Editor() {
                         const newObjs = objects.map((o) =>
                           o.id === selectedId ? { ...o, dash } : o,
                         );
-                        emitUpdate(newObjs);
+                        emitUpdate(newObjs, true, true);
                       }}
+                      onPointerUp={() => emitUpdate(objects)}
                       className="w-full accent-indigo-500"
                     />
                   </div>
@@ -1924,6 +1835,13 @@ export default function Editor() {
                   className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-100 hover:bg-white text-zinc-900 rounded-xl font-bold transition-all shadow-lg"
                 >
                   <Download className="w-4 h-4" /> Export Configuration
+                </button>
+                <button
+                  onClick={submitMemeToDatabase}
+                  disabled={saving}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl font-bold transition-all border border-white/5 disabled:opacity-50"
+                >
+                  <CloudUpload className="w-4 h-4" /> Submit to Database
                 </button>
               </div>
 
