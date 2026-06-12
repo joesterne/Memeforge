@@ -26,7 +26,7 @@ export default function Navbar() {
               <div className="w-10 h-10 bg-indigo-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.5)] hidden sm:flex">
                  <span className="text-xl font-black italic tracking-tighter text-white">M!</span>
               </div>
-              <div>MEMEFORGE <span className="text-indigo-500 dark:text-indigo-400">PRO</span></div>
+              <div>MEMEFORGE</div>
             </Link>
           </div>
           <div className="flex items-center gap-4">

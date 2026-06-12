@@ -67,18 +67,7 @@ export default function Profile() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-12 gap-6 max-w-[1200px] mx-auto pb-8 animate-in fade-in duration-500">
       
-      {paymentStatus === "success" && (
-        <div className="md:col-span-12 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-4 rounded-2xl flex items-center gap-3">
-          <CheckCircle2 className="w-5 h-5" />
-          <span className="font-semibold">Payment successful! You are now a Memeforge Pro member.</span>
-        </div>
-      )}
 
-      {paymentStatus === "cancelled" && (
-        <div className="md:col-span-12 bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-2xl flex items-center gap-3">
-          <span className="font-semibold">Checkout was cancelled.</span>
-        </div>
-      )}
 
       {/* Profile Header */}
       <div className="md:col-span-12 bg-zinc-900 p-6 rounded-3xl border border-white/10 shadow-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
@@ -96,21 +85,7 @@ export default function Profile() {
               <p className="text-zinc-400 text-sm font-medium">{user.email}</p>
            </div>
          </div>
-         <div className="z-10 bg-zinc-950/50 p-4 rounded-2xl border border-white/5 backdrop-blur-md flex flex-col gap-3">
-            <div>
-              <div className="text-sm font-bold text-white mb-1 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" /> Memeforge Pro
-              </div>
-              <p className="text-xs text-zinc-400 w-48 leading-relaxed">Upgrade to unlock premium templates, AI features, and remove watermarks.</p>
-            </div>
-            <button 
-              onClick={handleUpgrade} 
-              disabled={isUpgrading}
-              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-bold transition-colors shadow-lg shadow-indigo-500/20 disabled:opacity-50"
-            >
-              {isUpgrading ? "Starting checkout..." : "Upgrade for $9.99"}
-            </button>
-         </div>
+
       </div>
 
       {/* Analytics */}

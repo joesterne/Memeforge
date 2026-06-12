@@ -261,6 +261,55 @@ async function startServer() {
     }
   });
 
+  app.post("/api/chat-to-meme", express.json(), async (req, res) => {
+    try {
+      const { text } = req.body;
+      if (!text) return res.status(400).json({ error: "Text is required" });
+
+      const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: `You are an expert meme creator. The user wants a meme about: ${text}. 
+        Provide a concise visual description for an image generator (no text in the image) and the text overlay boxes for the meme canvas. Always provide reasonable x, y positions (assume canvas is 600x600 but keep text within 50-550 bounds, e.g. top and bottom text).
+        Make it very funny.`,
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              backgroundPrompt: {
+                type: Type.STRING,
+                description: "Visual description of the background image for a meme. Emphasize that there should be NO TEXT in the generated image.",
+              },
+              texts: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    text: { type: Type.STRING, description: "The meme text overlay" },
+                    x: { type: Type.NUMBER, description: "X coordinate, typically between 50 and 150 depending on text width" },
+                    y: { type: Type.NUMBER, description: "Y coordinate, e.g. 50 for top text, 500 for bottom text" },
+                  },
+                },
+              },
+            },
+            required: ["backgroundPrompt", "texts"],
+          },
+        },
+      });
+
+      const jsonStr = response.text?.trim() || "{}";
+      const data = JSON.parse(jsonStr);
+
+      res.json({ success: true, memeDraft: data });
+    } catch (error: any) {
+      console.error("AI Chat-to-Meme error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   app.post("/api/generate-meme", express.json(), async (req, res) => {
     try {
       const { text } = req.body;

@@ -48,7 +48,7 @@ import { toast } from "sonner";
 import Konva from "konva";
 
 import type { CanvasObject } from "../types/canvas";
-import { CanvasImage, CanvasText, AIPromptInput } from "../components/editor/CanvasElements";
+import { CanvasImage, CanvasText, AIPromptInput, AIMemeChatInput } from "../components/editor/CanvasElements";
 
 export default function Editor() {
   const { id } = useParams();
@@ -74,6 +74,7 @@ export default function Editor() {
   const [bgImage] = useImage(template?.url || "", "anonymous");
   const [isRoom, setIsRoom] = useState(!id?.startsWith("template_"));
   const [saving, setSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [isGridEnabled, setIsGridEnabled] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number | "fit">("fit");
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
@@ -450,6 +451,67 @@ export default function Editor() {
     }
   };
 
+  const handleAIGenerateMeme = async (prompt: string) => {
+    if (!prompt) return;
+    setGeneratingAI(true);
+    let newMemeData: any = null;
+    let bgUrl: string | null = null;
+
+    try {
+      // 1. Get meme layout and background idea via chat-to-meme (uses gemini-3.1-pro-preview with HIGH thinking)
+      toast.info("Thinking of a meme idea...");
+      const chatRes = await fetch("/api/chat-to-meme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: prompt }),
+      });
+      if (!chatRes.ok) throw new Error("Failed to chat-to-meme");
+      const chatData = await chatRes.json();
+      if (!chatData.success || !chatData.memeDraft) throw new Error("Invalid response from chat-to-meme");
+
+      newMemeData = chatData.memeDraft;
+      
+      // 2. Generate the background image
+      toast.info(`Generating image: ${newMemeData.backgroundPrompt}`);
+      const bgRes = await fetch("/api/generate-meme", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: newMemeData.backgroundPrompt }),
+      });
+      if (!bgRes.ok) throw new Error("Failed to generate background");
+      const bgData = await bgRes.json();
+      if (!bgData.success || !bgData.imageUrl) throw new Error("Failed to generate image");
+
+      bgUrl = bgData.imageUrl;
+      setUploadedImageUrl(bgUrl);
+      
+      // Give the image a sec to load to determine logical size, 
+      // but we can generate objects array based on 600x600 layout
+      const newObjs = newMemeData.texts.map((t: any) => ({
+        id: uuidv4(),
+        type: "text",
+        x: t.x || 50,
+        y: t.y || 50,
+        text: t.text?.toUpperCase() || "",
+        fontSize: 40,
+        fontFamily: "Impact, sans-serif",
+        fill: "#ffffff",
+        stroke: "#000000",
+        strokeWidth: 2,
+        draggable: true,
+      }));
+
+      emitUpdate(newObjs);
+      toast.success("Meme generated!");
+
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e.message || "Error generating meme");
+    } finally {
+      setGeneratingAI(false);
+    }
+  };
+
   const handleAIGenerateBackground = async (prompt: string) => {
     if (!prompt) return;
     setGeneratingAI(true);
@@ -487,7 +549,7 @@ export default function Editor() {
   const exportMeme = async (overrideFormat?: string) => {
     // clear selection first
     setSelectedId(null);
-    setSaving(true);
+    setIsExporting(true);
 
     // Give react complete cycle to remove selection
     await new Promise((r) => setTimeout(r, 100));
@@ -580,7 +642,7 @@ export default function Editor() {
         toast.error("Failed to export GIF: " + e.message);
       } finally {
         setHasUnsavedChanges(false);
-        setSaving(false);
+        setIsExporting(false);
       }
     } else {
       const uri = stageRef.current.toDataURL({
@@ -595,7 +657,7 @@ export default function Editor() {
       link.click();
       document.body.removeChild(link);
       setHasUnsavedChanges(false);
-      setSaving(false);
+      setIsExporting(false);
     }
   };
 
@@ -1266,6 +1328,13 @@ export default function Editor() {
             </h3>
 
             <div className="flex flex-col gap-3">
+              <div className="mb-4">
+                <AIMemeChatInput
+                  onGenerateMeme={handleAIGenerateMeme}
+                  generatingAI={generatingAI}
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-2 mb-2 bg-zinc-800/50 p-2 rounded-xl border border-white/5">
                 <div>
                   <label className="text-[10px] text-zinc-400 uppercase mb-1 pl-1 block">
@@ -1369,11 +1438,16 @@ export default function Editor() {
                 />
               </label>
 
-              <div className="flex flex-col gap-2 pt-2 pb-2">
-                <AIPromptInput
-                  onGenerate={handleAIGenerateBackground}
-                  generatingAI={generatingAI}
-                />
+              <div className="flex flex-col gap-4 pt-2 pb-2">
+                <div>
+                  <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest pl-1 block mb-2">
+                    AI Background
+                  </label>
+                  <AIPromptInput
+                    onGenerate={handleAIGenerateBackground}
+                    generatingAI={generatingAI}
+                  />
+                </div>
               </div>
 
               <button
@@ -1830,6 +1904,18 @@ export default function Editor() {
               </div>
 
               <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => exportMeme("image/png")}
+                  disabled={isExporting}
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg disabled:opacity-50"
+                >
+                  {isExporting ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  {isExporting ? "Processing..." : "Download PNG"}
+                </button>
                 <button
                   onClick={() => setShowExportModal(true)}
                   className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-100 hover:bg-white text-zinc-900 rounded-xl font-bold transition-all shadow-lg"

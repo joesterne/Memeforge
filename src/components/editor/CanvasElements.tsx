@@ -89,6 +89,51 @@ export const CanvasText = memo(
 );
 CanvasText.displayName = "CanvasText";
 
+export const AIMemeChatInput = memo(
+  ({
+    onGenerateMeme,
+    generatingAI,
+  }: {
+    onGenerateMeme: (prompt: string) => void;
+    generatingAI: boolean;
+  }) => {
+    const [aiPrompt, setAiPrompt] = useState("");
+    return (
+      <div className="flex flex-col gap-2">
+        <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest pl-1 block">
+          AI Meme Chat
+        </label>
+        <div className="flex flex-col gap-2 p-3 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
+          <textarea
+            placeholder="Describe a meme idea here (e.g. 'A cat working late on a friday')..."
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            className="w-full bg-zinc-950/50 border border-white/10 rounded-lg p-3 text-sm text-white appearance-none min-h-[80px] resize-none"
+          />
+          <button
+            onClick={() => onGenerateMeme(aiPrompt)}
+            disabled={generatingAI || !aiPrompt}
+            className="flex font-bold text-xs uppercase tracking-wider items-center justify-center py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all disabled:opacity-50"
+          >
+            {generatingAI ? (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Thinking...
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                Generate Meme
+              </div>
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  },
+);
+AIMemeChatInput.displayName = "AIMemeChatInput";
+
 export const AIPromptInput = memo(
   ({
     onGenerate,

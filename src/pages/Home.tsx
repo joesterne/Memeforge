@@ -737,12 +737,6 @@ export default function Home() {
             </button>
 
             <Link
-              to="/pro"
-              className="hidden sm:flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg hover:brightness-110 font-bold text-[11px] uppercase tracking-wider shadow-lg transition-all border border-orange-500/50"
-            >
-              👑 Pro
-            </Link>
-            <Link
               to="/editor/new"
               className="hidden lg:flex items-center gap-2 px-4 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 font-bold text-[11px] uppercase tracking-wider transition-colors text-zinc-300"
             >
@@ -862,12 +856,6 @@ export default function Home() {
               <span className="hidden sm:inline">Refresh</span>
             </button>
 
-            <Link
-              to="/pro"
-              className="hidden sm:flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-lg hover:brightness-110 font-bold text-[11px] uppercase tracking-wider shadow-lg transition-all border border-orange-500/50"
-            >
-              👑 Pro
-            </Link>
             <Link
               to="/editor/new"
               className="hidden lg:flex items-center gap-2 px-4 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 font-bold text-[11px] uppercase tracking-wider transition-colors text-zinc-300"
