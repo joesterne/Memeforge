@@ -38,6 +38,7 @@ import SearchBar from "../components/SearchBar";
 import TemplateCard from "../components/TemplateCard";
 import { InfiniteScrollLoader } from "../components/InfiniteScrollLoader";
 import { toast } from "sonner";
+import { getRecentCreations, deleteRecentCreation, RecentMeme } from "../lib/localStorage";
 
 interface MemeTemplate {
   id: string;
@@ -142,11 +143,13 @@ export default function Home() {
 
   const [userMemes, setUserMemes] = useState<any[]>([]);
   const [memesLoading, setMemesLoading] = useState(false);
+  const [recentCreations, setRecentCreations] = useState<RecentMeme[]>([]);
 
   const [favorites, setFavorites] = useState<Record<string, any>>({});
   const [favoritesLoading, setFavoritesLoading] = useState(false);
 
   useEffect(() => {
+    setRecentCreations(getRecentCreations());
     const saved = localStorage.getItem("recent_templates");
     if (saved) {
       try {
@@ -427,6 +430,13 @@ export default function Home() {
     [],
   );
 
+  const handleRemoveRecentLocal = useCallback((e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    deleteRecentCreation(id);
+    setRecentCreations((prev) => prev.filter((m) => m.id !== id));
+    toast.success("Removed from local history");
+  }, []);
+
   const toggleFavorite = useCallback(
     async (
       e: React.MouseEvent,
@@ -618,7 +628,72 @@ export default function Home() {
             I'm Feeling Lucky
           </button>
         </div>
+
+        <div className="flex flex-wrap justify-center gap-2 mt-4 px-4">
+          {["trending", "funny", "gaming", "reaction", "animals", "work", "sports", "cat", "dog"].map((tag) => (
+            <button
+              key={tag}
+              onClick={() => setSearch(search.toLowerCase() === tag ? "" : tag)}
+              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-colors border capitalize ${
+                search.toLowerCase() === tag
+                  ? "bg-indigo-600 border-indigo-500 text-white"
+                  : "bg-zinc-800/50 border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+              }`}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {recentCreations.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between pt-4 mb-4">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-zinc-100 tracking-tight">
+              <History className="text-indigo-400 w-5 h-5" /> Recent Memes
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {recentCreations.map((meme) => (
+              <div
+                key={meme.id}
+                className="group relative rounded-3xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 bg-zinc-900 border border-white/10 flex flex-col hover:border-indigo-500/50"
+              >
+                <Link
+                  to={`/editor/${meme.id}`}
+                  className="block aspect-square relative bg-zinc-950"
+                >
+                  {meme.thumbnailUrl ? (
+                    <img
+                      src={meme.thumbnailUrl}
+                      alt={meme.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-zinc-700 bg-zinc-900 font-medium text-xs">
+                      Blank Canvas
+                    </div>
+                  )}
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-3 pt-6 pointer-events-none">
+                    <p className="font-bold text-sm text-white truncate drop-shadow-md">
+                      {meme.title || "Custom Meme"}
+                    </p>
+                  </div>
+                </Link>
+                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={(e) => handleRemoveRecentLocal(e, meme.id)}
+                    className="p-2 bg-red-600/90 hover:bg-red-500 text-white rounded-full shadow-lg backdrop-blur-sm transition-colors text-xs flex items-center justify-center"
+                    title="Remove from history"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {user && (
         <>

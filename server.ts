@@ -68,6 +68,20 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  app.get("/api/test-gemini", async (req, res) => {
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: "Hello",
+      });
+      res.json({ success: true, text: response.text });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/trending-searches", async (req, res) => {
     try {
       const results: any = await Promise.race([
@@ -269,7 +283,7 @@ async function startServer() {
       const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3.5-flash",
         contents: `You are an expert meme creator. The user wants a meme about: ${text}. 
         Provide a concise visual description for an image generator (no text in the image) and the text overlay boxes for the meme canvas. Always provide reasonable x, y positions (assume canvas is 600x600 but keep text within 50-550 bounds, e.g. top and bottom text).
         Make it very funny.`,

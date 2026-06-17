@@ -49,6 +49,7 @@ import Konva from "konva";
 
 import type { CanvasObject } from "../types/canvas";
 import { CanvasImage, CanvasText, AIPromptInput, AIMemeChatInput } from "../components/editor/CanvasElements";
+import { saveRecentCreation } from "../lib/localStorage";
 
 export default function Editor() {
   const { id } = useParams();
@@ -266,7 +267,38 @@ export default function Editor() {
 
   // Auto-save logic
   useEffect(() => {
-    // Only auto-save if signed in, not mocking, and there are actually unsaved changes
+    if (!hasUnsavedChanges || !stageRef.current) return;
+    
+    // Auto-save to local history
+    const localTimer = setTimeout(() => {
+      try {
+        const title = template?.name || "Custom Meme";
+        let thumbUrl = uploadedImageUrl || template?.url || "";
+        
+        if (stageRef.current) {
+          try {
+            thumbUrl = stageRef.current.toDataURL({
+              pixelRatio: 150 / Math.max(stageRef.current.width() || 1, stageRef.current.height() || 1),
+              mimeType: "image/jpeg",
+              quality: 0.5
+            });
+          } catch(e) { } // Ignore CORS taint errors
+        }
+
+        saveRecentCreation({
+          id: roomId,
+          title,
+          thumbnailUrl: thumbUrl,
+          createdAt: new Date().toISOString()
+        });
+      } catch(e) {}
+    }, 3000);
+
+    return () => clearTimeout(localTimer);
+  }, [objects, hasUnsavedChanges, roomId, template?.name, template?.url, uploadedImageUrl]);
+
+  useEffect(() => {
+    // Only auto-save to cloud if signed in, not mocking, and there are actually unsaved changes
     if (!user || (!db || db.app.options.projectId === "MOCK") || !hasUnsavedChanges) {
       return; 
     }
@@ -458,16 +490,29 @@ export default function Editor() {
     let bgUrl: string | null = null;
 
     try {
-      // 1. Get meme layout and background idea via chat-to-meme (uses gemini-3.1-pro-preview with HIGH thinking)
+      // 1. Get meme layout and background idea via chat-to-meme
       toast.info("Thinking of a meme idea...");
       const chatRes = await fetch("/api/chat-to-meme", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: prompt }),
       });
-      if (!chatRes.ok) throw new Error("Failed to chat-to-meme");
+      if (!chatRes.ok) {
+        const errorData = await chatRes.json().catch(() => null);
+        let errMsg = errorData?.error || "Failed to chat-to-meme";
+        if (errMsg.includes("dunning decision")) {
+          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+        }
+        throw new Error(errMsg);
+      }
       const chatData = await chatRes.json();
-      if (!chatData.success || !chatData.memeDraft) throw new Error("Invalid response from chat-to-meme");
+      if (!chatData.success || !chatData.memeDraft) {
+        let errMsg = chatData.error || "Invalid response from chat-to-meme";
+        if (errMsg && typeof errMsg === 'string' && errMsg.includes("dunning decision")) {
+          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+        }
+        throw new Error(errMsg);
+      }
 
       newMemeData = chatData.memeDraft;
       
@@ -478,9 +523,22 @@ export default function Editor() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: newMemeData.backgroundPrompt }),
       });
-      if (!bgRes.ok) throw new Error("Failed to generate background");
+      if (!bgRes.ok) {
+        const errorData = await bgRes.json().catch(() => null);
+        let errMsg = errorData?.error || "Failed to generate background";
+        if (errMsg.includes("dunning decision")) {
+          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+        }
+        throw new Error(errMsg);
+      }
       const bgData = await bgRes.json();
-      if (!bgData.success || !bgData.imageUrl) throw new Error("Failed to generate image");
+      if (!bgData.success || !bgData.imageUrl) {
+        let errMsg = bgData.error || "Failed to generate image";
+        if (errMsg && typeof errMsg === 'string' && errMsg.includes("dunning decision")) {
+          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+        }
+        throw new Error(errMsg);
+      }
 
       bgUrl = bgData.imageUrl;
       setUploadedImageUrl(bgUrl);

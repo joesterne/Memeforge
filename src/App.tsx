@@ -14,6 +14,19 @@ const Home = lazy(() => import("./pages/Home"));
 const Editor = lazy(() => import("./pages/Editor"));
 const Profile = lazy(() => import("./pages/Profile"));
 
+const LoadingSkeleton = () => (
+  <div className="w-full h-full">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 mt-6">
+      {[...Array(15)].map((_, i) => (
+        <div
+          key={i}
+          className="aspect-square bg-zinc-900 rounded-3xl animate-pulse border border-white/5"
+        ></div>
+      ))}
+    </div>
+  </div>
+);
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -22,7 +35,7 @@ export default function App() {
           <div className="h-screen bg-slate-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 font-sans flex flex-col overflow-hidden transition-colors duration-300">
             <Navbar />
             <main id="main-scroll-container" className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 overflow-y-auto">
-              <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-zinc-500">Loading...</div>}>
+              <Suspense fallback={<LoadingSkeleton />}>
                 <Routes>
                   <Route path="/" element={<Home />} />
                   <Route path="/editor/:id" element={<Editor />} />
