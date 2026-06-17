@@ -82,69 +82,30 @@ async function startServer() {
     }
   });
 
-  app.get("/api/trending-searches", async (req, res) => {
+let cachedTrends: { data: string[]; timestamp: number } | null = null;
+const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
+
+app.get("/api/trending-searches", async (req, res) => {
+  if (cachedTrends && Date.now() - cachedTrends.timestamp < CACHE_DURATION_MS) {
+    return res.json({ success: true, terms: cachedTrends.data, cached: true });
+  }
+
+  try {
+    const results: any = await Promise.race([
+      googleTrends.dailyTrends({ geo: "US" }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout")), 2500),
+      ),
+    ]);
+
+    let data;
     try {
-      const results: any = await Promise.race([
-        googleTrends.dailyTrends({ geo: "US" }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Timeout")), 2500),
-        ),
-      ]);
-
-      let data;
-      try {
-        data = JSON.parse(results);
-      } catch (parseError) {
-        console.warn(
-          "Google Trends returned invalid JSON (likely rate limited or blocked). Using fallback.",
-        );
-        return res.json({
-          success: true,
-          terms: [
-            "drake",
-            "kendrick",
-            "nba",
-            "gta 6",
-            "ai",
-            "taylor swift",
-            "marvel",
-            "apple",
-            "doge",
-            "memes",
-          ],
-        });
-      }
-
-      let terms: string[] = [];
-
-      const days = data?.default?.trendingSearchesDays;
-      if (days && days.length > 0) {
-        const searches = days[0].trendingSearches;
-        if (searches) {
-          terms = searches.map((s: any) => s.title.query.toLowerCase());
-        }
-      }
-
-      if (terms.length === 0) {
-        terms = [
-          "drake",
-          "kendrick",
-          "nba",
-          "gta 6",
-          "ai",
-          "taylor swift",
-          "marvel",
-          "apple",
-          "doge",
-          "memes",
-        ];
-      }
-
-      res.json({ success: true, terms });
-    } catch (error: any) {
-      console.warn("Google Trends Error:", error.message);
-      // Fallback on catch
-      const fallbackTerms = [
+      data = JSON.parse(results);
+    } catch (parseError) {
+      console.warn(
+        "Google Trends returned invalid JSON (likely rate limited or blocked). Using fallback.",
+      );
+      const terms = [
         "drake",
         "kendrick",
         "nba",
@@ -156,124 +117,192 @@ async function startServer() {
         "doge",
         "memes",
       ];
-      res.json({
-        success: true,
-        terms: fallbackTerms,
-        fallback: true,
-        error: error.message,
+      cachedTrends = { data: terms, timestamp: Date.now() };
+      return res.json({ success: true, terms });
+    }
+
+    let terms: string[] = [];
+    const days = data?.default?.trendingSearchesDays;
+    if (days && days.length > 0) {
+      const searches = days[0].trendingSearches;
+      if (searches) {
+        terms = searches.map((s: any) => s.title.query.toLowerCase());
+      }
+    }
+
+    if (terms.length === 0) {
+      terms = [
+        "drake",
+        "kendrick",
+        "nba",
+        "gta 6",
+        "ai",
+        "taylor swift",
+        "marvel",
+        "apple",
+        "doge",
+        "memes",
+      ];
+    }
+
+    cachedTrends = { data: terms, timestamp: Date.now() };
+    res.json({ success: true, terms });
+  } catch (error: any) {
+    console.warn("Google Trends Error:", error.message);
+    const fallbackTerms = [
+      "drake",
+      "kendrick",
+      "nba",
+      "gta 6",
+      "ai",
+      "taylor swift",
+      "marvel",
+      "apple",
+      "doge",
+      "memes",
+    ];
+    cachedTrends = { data: fallbackTerms, timestamp: Date.now() };
+    res.json({
+      success: true,
+      terms: fallbackTerms,
+      fallback: true,
+      error: error.message,
+    });
+  }
+});
+
+const memeSearchCache = new Map<string, { data: any[]; timestamp: number }>();
+
+app.get("/api/search-memes", async (req, res) => {
+  try {
+    const q = req.query.q as string;
+    if (!q) return res.json({ success: true, memes: [] });
+
+    if (memeSearchCache.has(q) && Date.now() - memeSearchCache.get(q)!.timestamp < CACHE_DURATION_MS) {
+      return res.json({ success: true, memes: memeSearchCache.get(q)!.data, cached: true });
+    }
+
+    const response = await fetch(
+      `https://imgflip.com/search?q=${encodeURIComponent(q)}`,
+    );
+    if (!response.ok) {
+      throw new Error("Failed to search Imgflip");
+    }
+
+    const text = await response.text();
+    const memes: any[] = [];
+
+    // Simple regex to extract search results from Imgflip
+    const itemRegex =
+      /<img class="base-img" src="(\/\/i\.imgflip\.com\/[^"]+)" alt="([^"]+)"/g;
+    let match;
+    let count = 0;
+    while ((match = itemRegex.exec(text)) !== null && count < 20) {
+      const url = "https:" + match[1];
+      const name = match[2].replace(/ \w+ meme$/, "").trim(); // Remove " meme" or "blank meme"
+      // Generate pseudo ID
+      const id =
+        url.split("/").pop()?.split(".")[0] || Math.random().toString();
+      memes.push({
+        id: `search_${id}`,
+        name: name,
+        url: url,
+        width: 500,
+        height: 500,
+        box_count: 2, // arbitrary
+        dateAdded: new Date().toISOString(),
       });
+      count++;
     }
-  });
 
-  app.get("/api/search-memes", async (req, res) => {
-    try {
-      const q = req.query.q as string;
-      if (!q) return res.json({ success: true, memes: [] });
+    memeSearchCache.set(q, { data: memes, timestamp: Date.now() });
+    res.json({ success: true, memes });
+  } catch (error: any) {
+    console.error("Search error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-      const response = await fetch(
-        `https://imgflip.com/search?q=${encodeURIComponent(q)}`,
-      );
-      if (!response.ok) {
-        throw new Error("Failed to search Imgflip");
-      }
+const googleGifCache = new Map<string, { data: any[]; timestamp: number }>();
 
-      const text = await response.text();
-      const memes: any[] = [];
+app.get("/api/search-google-gifs", async (req, res) => {
+  try {
+    const q = req.query.q as string;
+    if (!q) return res.json({ success: true, gifs: [] });
 
-      // Simple regex to extract search results from Imgflip
-      const itemRegex =
-        /<img class="base-img" src="(\/\/i\.imgflip\.com\/[^"]+)" alt="([^"]+)"/g;
-      let match;
-      let count = 0;
-      while ((match = itemRegex.exec(text)) !== null && count < 20) {
-        const url = "https:" + match[1];
-        const name = match[2].replace(/ \w+ meme$/, "").trim(); // Remove " meme" or "blank meme"
-        // Generate pseudo ID
-        const id =
-          url.split("/").pop()?.split(".")[0] || Math.random().toString();
-        memes.push({
-          id: `search_${id}`,
-          name: name,
-          url: url,
-          width: 500,
-          height: 500,
-          box_count: 2, // arbitrary
-          dateAdded: new Date().toISOString(),
-        });
-        count++;
-      }
-
-      res.json({ success: true, memes });
-    } catch (error: any) {
-      console.error("Search error:", error);
-      res.status(500).json({ success: false, error: error.message });
+    if (googleGifCache.has(q) && Date.now() - googleGifCache.get(q)!.timestamp < CACHE_DURATION_MS) {
+      return res.json({ success: true, gifs: googleGifCache.get(q)!.data, cached: true });
     }
-  });
 
-  app.get("/api/search-google-gifs", async (req, res) => {
-    try {
-      const q = req.query.q as string;
-      if (!q) return res.json({ success: true, gifs: [] });
+    // We explicitly append "gif" to ensure we get animated images
+    const searchQuery = q.toLowerCase().includes("gif") ? q : `${q} gif`;
+    const images = await google.image(searchQuery, { safe: false });
 
-      // We explicitly append "gif" to ensure we get animated images
-      const searchQuery = q.toLowerCase().includes("gif") ? q : `${q} gif`;
-      const images = await google.image(searchQuery, { safe: false });
+    const gifs = images.map((item: any, i: number) => ({
+      id: `google_gif_${item.id || Date.now() + i}`,
+      name: item.origin?.title || "Google GIF",
+      url: item.url,
+      previewUrl: item.preview?.url,
+      width: item.width || 400,
+      height: item.height || 400,
+      box_count: 1,
+      dateAdded: new Date(
+        Date.now() - Math.random() * 100000000,
+      ).toISOString(),
+      is_video: true,
+    }));
 
-      const gifs = images.map((item: any, i: number) => ({
-        id: `google_gif_${item.id || Date.now() + i}`,
-        name: item.origin?.title || "Google GIF",
-        url: item.url,
-        previewUrl: item.preview?.url,
-        width: item.width || 400,
-        height: item.height || 400,
-        box_count: 1,
-        dateAdded: new Date(
-          Date.now() - Math.random() * 100000000,
-        ).toISOString(),
-        is_video: true,
-      }));
+    googleGifCache.set(q, { data: gifs, timestamp: Date.now() });
+    res.json({ success: true, gifs });
+  } catch (error: any) {
+    console.error("Google GIF Search error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-      res.json({ success: true, gifs });
-    } catch (error: any) {
-      console.error("Google GIF Search error:", error);
-      res.status(500).json({ success: false, error: error.message });
+const tenorGifCache = new Map<string, { data: any; timestamp: number }>();
+
+app.get("/api/search-gifs", async (req, res) => {
+  try {
+    const q = req.query.q as string;
+    const pos = req.query.pos as string;
+    if (!q) return res.json({ success: true, gifs: [], next: "" });
+
+    const cacheKey = `${q}_${pos || ""}`;
+    if (tenorGifCache.has(cacheKey) && Date.now() - tenorGifCache.get(cacheKey)!.timestamp < CACHE_DURATION_MS) {
+      const cached = tenorGifCache.get(cacheKey)!.data;
+      return res.json({ success: true, ...cached, cached: true });
     }
-  });
 
-  app.get("/api/search-gifs", async (req, res) => {
-    try {
-      const q = req.query.q as string;
-      const pos = req.query.pos as string;
-      if (!q) return res.json({ success: true, gifs: [], next: "" });
-
-      const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
-      const response = await fetch(
-        `https://g.tenor.com/v1/search?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
-      );
-      if (!response.ok) {
-        throw new Error("Failed to search Tenor");
-      }
-
-      const data = await response.json();
-      const gifs = (data.results || []).map((item: any) => ({
-        id: `gif_${item.id}`,
-        name: item.content_description || "Animated GIF",
-        url: item.media[0].gif.url,
-        width: item.media[0].gif.dims[0],
-        height: item.media[0].gif.dims[1],
-        box_count: 1, // gifs usually have 1 text box if any
-        dateAdded: new Date(
-          Date.now() - Math.random() * 10000000000,
-        ).toISOString(),
-        is_video: true,
-      }));
-
-      res.json({ success: true, gifs, next: data.next });
-    } catch (error: any) {
-      console.error("GIF Search error:", error);
-      res.status(500).json({ success: false, error: error.message });
+    const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
+    const response = await fetch(
+      `https://g.tenor.com/v1/search?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
+    );
+    if (!response.ok) {
+      throw new Error("Failed to search Tenor");
     }
-  });
+
+    const data = await response.json();
+    const gifs = (data.results || []).map((item: any) => ({
+      id: `gif_${item.id}`,
+      name: item.content_description || "Animated GIF",
+      url: item.media[0].gif.url,
+      width: item.media[0].gif.dims[0],
+      height: item.media[0].gif.dims[1],
+      box_count: 1, // gifs usually have 1 text box if any
+      dateAdded: new Date(
+        Date.now() - Math.random() * 10000000000,
+      ).toISOString(),
+      is_video: true,
+    }));
+
+    tenorGifCache.set(cacheKey, { data: { gifs, next: data.next }, timestamp: Date.now() });
+    res.json({ success: true, gifs, next: data.next });
+  } catch (error: any) {
+    console.error("GIF Search error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
   app.post("/api/chat-to-meme", express.json(), async (req, res) => {
     try {

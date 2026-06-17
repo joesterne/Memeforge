@@ -1,7 +1,6 @@
-import React, { memo, useRef } from "react";
+import React, { memo } from "react";
 import { Link } from "react-router";
 import { Heart } from "lucide-react";
-import { useIntersectionObserver } from "../lib/hooks";
 
 interface MemeTemplate {
   id: string;
@@ -35,51 +34,35 @@ const TemplateCard = memo(
     onMarkRecent,
   }: TemplateCardProps) => {
     const [imgSrc, setImgSrc] = React.useState(template.url);
-    const ref = useRef<HTMLAnchorElement>(null);
-    const options = React.useMemo(() => {
-      return {
-        root: document.getElementById("main-scroll-container"),
-        rootMargin: "300px"
-      };
-    }, []);
-    const isVisible = useIntersectionObserver(
-      ref,
-      options,
-      true,
-    );
 
     React.useEffect(() => {
       setImgSrc(template.url);
     }, [template.url]);
 
     return (
-      <div className="group relative rounded-3xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 bg-zinc-900 border border-white/10 flex flex-col hover:border-indigo-500/50">
+      <div className="group relative rounded-3xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 bg-zinc-900 border border-white/10 flex flex-col hover:border-indigo-500/50" style={{ contentVisibility: "auto", containIntrinsicSize: "200px" }}>
         <Link
-          ref={ref}
           to={`/editor/template_${template.id}`}
           state={{ template }}
           onClick={() => onMarkRecent(template.id)}
           className="block aspect-square w-full overflow-hidden bg-zinc-950 relative flex items-center justify-center"
         >
-          {isVisible ? (
-            <img
-              src={imgSrc}
-              onError={(e) => {
-                if (template.previewUrl && imgSrc !== template.previewUrl) {
-                  setImgSrc(template.previewUrl);
-                } else {
-                  setImgSrc(
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-                  );
-                }
-              }}
-              alt={template.name}
-              loading="lazy"
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-            />
-          ) : (
-            <div className="w-full h-full absolute inset-0 bg-zinc-900 animate-pulse border-none"></div>
-          )}
+          <img
+            src={imgSrc}
+            onError={(e) => {
+              if (template.previewUrl && imgSrc !== template.previewUrl) {
+                setImgSrc(template.previewUrl);
+              } else {
+                setImgSrc(
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+                );
+              }
+            }}
+            alt={template.name}
+            loading="lazy"
+            decoding="async"
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+          />
         </Link>
 
         {user && (
