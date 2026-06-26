@@ -86,7 +86,8 @@ let cachedTrends: { data: string[]; timestamp: number } | null = null;
 const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
 
 app.get("/api/trending-searches", async (req, res) => {
-  if (cachedTrends && Date.now() - cachedTrends.timestamp < CACHE_DURATION_MS) {
+  const force = req.query.force === "true";
+  if (!force && cachedTrends && Date.now() - cachedTrends.timestamp < CACHE_DURATION_MS) {
     return res.json({ success: true, terms: cachedTrends.data, cached: true });
   }
 
@@ -176,9 +177,10 @@ const memeSearchCache = new Map<string, { data: any[]; timestamp: number }>();
 app.get("/api/search-memes", async (req, res) => {
   try {
     const q = req.query.q as string;
+    const force = req.query.force === "true";
     if (!q) return res.json({ success: true, memes: [] });
 
-    if (memeSearchCache.has(q) && Date.now() - memeSearchCache.get(q)!.timestamp < CACHE_DURATION_MS) {
+    if (!force && memeSearchCache.has(q) && Date.now() - memeSearchCache.get(q)!.timestamp < CACHE_DURATION_MS) {
       return res.json({ success: true, memes: memeSearchCache.get(q)!.data, cached: true });
     }
 
@@ -228,9 +230,10 @@ const googleGifCache = new Map<string, { data: any[]; timestamp: number }>();
 app.get("/api/search-google-gifs", async (req, res) => {
   try {
     const q = req.query.q as string;
+    const force = req.query.force === "true";
     if (!q) return res.json({ success: true, gifs: [] });
 
-    if (googleGifCache.has(q) && Date.now() - googleGifCache.get(q)!.timestamp < CACHE_DURATION_MS) {
+    if (!force && googleGifCache.has(q) && Date.now() - googleGifCache.get(q)!.timestamp < CACHE_DURATION_MS) {
       return res.json({ success: true, gifs: googleGifCache.get(q)!.data, cached: true });
     }
 
@@ -266,17 +269,19 @@ app.get("/api/search-gifs", async (req, res) => {
   try {
     const q = req.query.q as string;
     const pos = req.query.pos as string;
+    const force = req.query.force === "true";
     if (!q) return res.json({ success: true, gifs: [], next: "" });
 
     const cacheKey = `${q}_${pos || ""}`;
-    if (tenorGifCache.has(cacheKey) && Date.now() - tenorGifCache.get(cacheKey)!.timestamp < CACHE_DURATION_MS) {
+    if (!force && tenorGifCache.has(cacheKey) && Date.now() - tenorGifCache.get(cacheKey)!.timestamp < CACHE_DURATION_MS) {
       const cached = tenorGifCache.get(cacheKey)!.data;
       return res.json({ success: true, ...cached, cached: true });
     }
 
     const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
+    const endpoint = force ? "random" : "search";
     const response = await fetch(
-      `https://g.tenor.com/v1/search?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
+      `https://g.tenor.com/v1/${endpoint}?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
     );
     if (!response.ok) {
       throw new Error("Failed to search Tenor");

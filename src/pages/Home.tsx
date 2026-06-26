@@ -180,7 +180,7 @@ export default function Home() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const trendsRes = await fetch("/api/trending-searches", {
+        const trendsRes = await fetch(`/api/trending-searches${force ? "?force=true" : ""}`, {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -223,11 +223,15 @@ export default function Home() {
             for (const term of trendsList) {
               if (lowerName.includes(term.toLowerCase())) matchCount++;
             }
-            return matchCount;
+            // Add a small random factor if forced to change up the order of ties
+            return matchCount + (force ? Math.random() * 0.5 : 0);
           };
           memes.sort(
             (a: any, b: any) => boostScore(b.name) - boostScore(a.name),
           );
+        } else if (force) {
+          // If no trends but forced refresh, just mildly shuffle
+          memes.sort(() => Math.random() - 0.5);
         }
 
         cachedMemes = memes;
@@ -907,7 +911,7 @@ export default function Home() {
                   try {
                     const query = deferredSearch.trim() || "trending meme";
                     const res = await fetch(
-                      `/api/search-gifs?q=${encodeURIComponent(query)}`,
+                      `/api/search-gifs?q=${encodeURIComponent(query)}&force=true`,
                     );
                     const data = await res.json();
                     if (data.success) {

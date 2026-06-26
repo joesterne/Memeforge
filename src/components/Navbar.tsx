@@ -3,11 +3,13 @@ import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { LogIn, LogOut, Menu, X, Home, Paintbrush, User, Sun, Moon } from "lucide-react";
 import { useState } from "react";
+import { AuthModal } from "./AuthModal";
 
 export default function Navbar() {
-  const { user, signInWithGoogle, signInWithApple, logOut } = useAuth();
+  const { user, logOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const closeMenu = () => setIsMenuOpen(false);
 
@@ -42,23 +44,23 @@ export default function Navbar() {
                  <Link to="/editor/new" className="text-sm font-semibold hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors text-zinc-700 dark:text-zinc-300 hidden sm:block">
                    Create
                  </Link>
-                 <Link to="/profile" className="flex items-center gap-2 text-sm font-medium hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors">
+                 <Link to="/profile" className="flex items-center gap-2 text-sm font-medium hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors bg-black/5 dark:bg-white/5 pr-3 pl-1 py-1 rounded-full border border-transparent hover:border-black/10 dark:hover:border-white/10">
                    {user.photoURL ? (
-                     <img src={user.photoURL} alt={user.displayName || "User"} className="w-8 h-8 rounded-full border-2 border-slate-100 dark:border-zinc-900 bg-zinc-200 dark:bg-zinc-800 object-cover" />
+                     <img src={user.photoURL} alt={user.displayName || "User"} className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 object-cover" />
                    ) : (
-                     <div className="w-8 h-8 rounded-full border-2 border-slate-100 dark:border-zinc-900 bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
-                       <User className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
+                     <div className="w-7 h-7 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
+                       <User className="w-3 h-3 text-zinc-500 dark:text-zinc-400" />
                      </div>
                    )}
+                   <span className="hidden sm:inline-block font-semibold">
+                      {user.displayName ? user.displayName.split(' ')[0] : 'Profile'}
+                   </span>
                  </Link>
               </>
             ) : (
               <div className="flex items-center gap-2">
-                <button onClick={signInWithGoogle} className="flex items-center gap-2 bg-zinc-800 border border-white/10 text-white px-3 py-2 rounded-lg font-semibold hover:bg-zinc-700 transition-all text-sm">
-                  Google
-                </button>
-                <button onClick={signInWithApple} className="flex items-center gap-2 bg-indigo-600 text-white px-3 py-2 rounded-lg font-semibold hover:bg-indigo-500 transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] text-sm">
-                  Apple
+                <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-indigo-500 transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] text-sm">
+                  Sign In
                 </button>
               </div>
             )}
@@ -119,6 +121,7 @@ export default function Navbar() {
           </div>
         )}
       </div>
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
     </>
   );
 }
