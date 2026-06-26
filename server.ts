@@ -6,6 +6,8 @@ import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import googleTrends from "google-trends-api";
 import google from "googlethis";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 
 let stripeClient: Stripe | null = null;
 function getStripe(): Stripe {
@@ -24,6 +26,32 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
+
+  app.set("trust proxy", 1); // trust first proxy
+  
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  }));
+
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many requests, please try again later." }
+  });
+
+  const aiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20, // Limit each IP to 20 AI generation requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many AI generation requests, please try again later." }
+  });
+
+  // Apply general API rate limit
+  app.use("/api/", apiLimiter);
 
   const io = new Server(httpServer, {
     cors: { origin: "*" },
@@ -78,7 +106,8 @@ async function startServer() {
       });
       res.json({ success: true, text: response.text });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      console.error("Test Gemini Error:", e);
+      res.status(500).json({ error: "An unexpected error occurred while testing the API. Please try again later." });
     }
   });
 
@@ -149,7 +178,7 @@ app.get("/api/trending-searches", async (req, res) => {
     cachedTrends = { data: terms, timestamp: Date.now() };
     res.json({ success: true, terms });
   } catch (error: any) {
-    console.warn("Google Trends Error:", error.message);
+    console.warn("Google Trends Error:", error);
     const fallbackTerms = [
       "drake",
       "kendrick",
@@ -220,8 +249,8 @@ app.get("/api/search-memes", async (req, res) => {
     memeSearchCache.set(q, { data: memes, timestamp: Date.now() });
     res.json({ success: true, memes });
   } catch (error: any) {
-    console.error("Search error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Search error:", error, "Query:", req.query.q);
+    res.status(500).json({ success: false, error: "An unexpected error occurred while searching memes. Please try again later." });
   }
 });
 
@@ -258,8 +287,8 @@ app.get("/api/search-google-gifs", async (req, res) => {
     googleGifCache.set(q, { data: gifs, timestamp: Date.now() });
     res.json({ success: true, gifs });
   } catch (error: any) {
-    console.error("Google GIF Search error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Google GIF Search error:", error, "Query:", req.query.q);
+    res.status(500).json({ success: false, error: "An unexpected error occurred while searching Google GIFs. Please try again later." });
   }
 });
 
@@ -304,12 +333,12 @@ app.get("/api/search-gifs", async (req, res) => {
     tenorGifCache.set(cacheKey, { data: { gifs, next: data.next }, timestamp: Date.now() });
     res.json({ success: true, gifs, next: data.next });
   } catch (error: any) {
-    console.error("GIF Search error:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("GIF Search error:", error, "Query:", req.query.q);
+    res.status(500).json({ success: false, error: "An unexpected error occurred while searching GIFs. Please try again later." });
   }
 });
 
-  app.post("/api/chat-to-meme", express.json(), async (req, res) => {
+  app.post("/api/chat-to-meme", aiLimiter, express.json(), async (req, res) => {
     try {
       const { text } = req.body;
       if (!text) return res.status(400).json({ error: "Text is required" });
@@ -353,12 +382,12 @@ app.get("/api/search-gifs", async (req, res) => {
 
       res.json({ success: true, memeDraft: data });
     } catch (error: any) {
-      console.error("AI Chat-to-Meme error:", error);
-      res.status(500).json({ success: false, error: error.message });
+      console.error("AI Chat-to-Meme error:", error, "Body:", req.body);
+      res.status(500).json({ success: false, error: "An unexpected error occurred during AI chat generation. Please try again later." });
     }
   });
 
-  app.post("/api/generate-meme", express.json(), async (req, res) => {
+  app.post("/api/generate-meme", aiLimiter, express.json(), async (req, res) => {
     try {
       const { text } = req.body;
       if (!text) return res.status(400).json({ error: "Text is required" });
@@ -397,8 +426,8 @@ app.get("/api/search-gifs", async (req, res) => {
           .json({ success: false, error: "Failed to generate image" });
       }
     } catch (error: any) {
-      console.error("AI Generation error:", error);
-      res.status(500).json({ success: false, error: error.message });
+      console.error("AI Generation error:", error, "Body:", req.body);
+      res.status(500).json({ success: false, error: "An unexpected error occurred during AI generation. Please try again later." });
     }
   });
 
@@ -426,8 +455,8 @@ app.get("/api/search-gifs", async (req, res) => {
       });
       res.json({ id: session.id, url: session.url });
     } catch (error: any) {
-      console.error("Stripe error:", error);
-      res.status(500).json({ error: error.message });
+      console.error("Stripe error:", error, "Body:", req.body);
+      res.status(500).json({ error: "An unexpected error occurred during checkout. Please try again later." });
     }
   });
 

@@ -32,12 +32,45 @@
         "objects": { "type": "array", "items": { "$ref": "#/entities/CanvasObject" } }
       },
       "required": ["authorId", "createdAt", "objects"]
+    },
+    "Favorite": {
+      "title": "Favorite",
+      "description": "A favorited meme template",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "templateId": { "type": "string" },
+        "url": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "templateId", "url", "name", "createdAt"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A submitted meme",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "memeUrl": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "userName", "memeUrl", "createdAt"]
     }
   },
   "firestore": {
     "/memes/{memeId}": {
       "schema": "#/entities/Meme",
       "description": "User created memes"
+    },
+    "/favorites/{favoriteId}": {
+      "schema": "#/entities/Favorite",
+      "description": "User favorited templates"
+    },
+    "/submissions/{submissionId}": {
+      "schema": "#/entities/Submission",
+      "description": "User submitted memes"
     }
   }
 }

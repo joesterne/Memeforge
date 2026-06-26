@@ -37,6 +37,34 @@ service cloud.firestore {
              (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
     }
 
+    function isValidFavorite(data) {
+      return data.keys().hasAll(['userId', 'templateId', 'url', 'name', 'createdAt']) &&
+             data.keys().size() == 5 &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.templateId is string &&
+             data.templateId.size() <= 128 &&
+             data.url is string &&
+             data.url.size() <= 2000 &&
+             data.name is string &&
+             data.name.size() <= 200 &&
+             data.createdAt is string &&
+             data.createdAt.size() <= 50;
+    }
+
+    function isValidSubmission(data) {
+      return data.keys().hasAll(['userId', 'userName', 'memeUrl', 'createdAt']) &&
+             data.keys().size() == 4 &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userName is string &&
+             data.userName.size() <= 100 &&
+             data.memeUrl is string &&
+             data.memeUrl.size() <= 5000000 &&
+             data.createdAt is string &&
+             data.createdAt.size() <= 50;
+    }
+
     // 3. Collection Rules
     match /memes/{memeId} {
       // Anyone can read a meme (for sharing)
@@ -55,19 +83,20 @@ service cloud.firestore {
     
     // Favorites rules
     match /favorites/{favoriteId} {
-      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
-      
-      // when creating, make sure userId matches the auth user, and doc name has that format. 
-      // Simplified validation for hackathon:
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
-      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+      allow read: if isSignedIn() && isValidId(favoriteId) && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(favoriteId) && isValidFavorite(incoming());
+      allow update: if false; // Favorites shouldn't be updated, just created or deleted
+      allow delete: if isSignedIn() && isValidId(favoriteId) && existing().userId == request.auth.uid;
     }
 
     match /submissions/{submissionId} {
-      // Anyone can see submissions
-      allow read: if true;
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
-      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+      // List/read only allowed for own submissions to prevent data exposure (OWASP Broken Access Control)
+      allow read: if isSignedIn() && isValidId(submissionId) && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(submissionId) && isValidSubmission(incoming());
+      allow update: if false; // Submissions are immutable
+      allow delete: if isSignedIn() && isValidId(submissionId) && existing().userId == request.auth.uid;
     }
   }
 }
