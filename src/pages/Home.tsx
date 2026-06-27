@@ -670,6 +670,7 @@ export default function Home() {
                   {meme.thumbnailUrl ? (
                     <img
                       src={meme.thumbnailUrl}
+                      loading="lazy"
                       alt={meme.title}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     />
@@ -737,6 +738,7 @@ export default function Home() {
                     {meme.templateUrl ? (
                       <img
                         src={meme.templateUrl}
+                        loading="lazy"
                         alt="template"
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                       />

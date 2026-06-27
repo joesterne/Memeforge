@@ -60,7 +60,7 @@ service cloud.firestore {
              data.userName is string &&
              data.userName.size() <= 100 &&
              data.memeUrl is string &&
-             data.memeUrl.size() <= 5000000 &&
+             data.memeUrl.size() <= 20000 &&
              data.createdAt is string &&
              data.createdAt.size() <= 50;
     }

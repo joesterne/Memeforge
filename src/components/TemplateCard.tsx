@@ -49,6 +49,7 @@ const TemplateCard = memo(
         >
           <img
             src={imgSrc}
+            loading="lazy"
             onError={(e) => {
               if (template.previewUrl && imgSrc !== template.previewUrl) {
                 setImgSrc(template.previewUrl);

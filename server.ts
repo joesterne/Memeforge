@@ -6,6 +6,7 @@ import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import googleTrends from "google-trends-api";
 import google from "googlethis";
+import compression from "compression";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 
@@ -33,6 +34,7 @@ async function startServer() {
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
   }));
+  app.use(compression());
 
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes

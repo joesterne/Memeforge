@@ -134,7 +134,7 @@ export default function Profile() {
                      <Link key={meme.id} to={`/editor/${meme.id}`} className="group block relative rounded-2xl border border-white/5 overflow-hidden hover:border-indigo-500/50 hover:shadow-[0_0_20px_rgba(99,102,241,0.2)] transition-all bg-zinc-950">
                          <div className="aspect-square relative">
                              {meme.templateUrl ? (
-                                <img src={meme.templateUrl} alt="template" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                <img src={meme.templateUrl} loading="lazy" alt="template" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                              ) : (
                                 <div className="w-full h-full flex items-center justify-center text-zinc-700 bg-zinc-900 font-medium text-xs">Blank Canvas</div>
                              )}

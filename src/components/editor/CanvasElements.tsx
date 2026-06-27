@@ -56,6 +56,7 @@ export const CanvasText = memo(
     handleTransformEnd,
     onDblClick,
     dragBoundFunc,
+    isExporting,
   }: any) => {
     const handleSelect = useCallback(
       () => setSelectedId(obj.id),
@@ -83,6 +84,8 @@ export const CanvasText = memo(
         onTransformEnd={handleTransformEnd}
         onDblClick={onDblClick}
         onDblTap={onDblClick}
+        opacity={isExporting ? 1 : 0}
+        listening={false}
       />
     );
   },

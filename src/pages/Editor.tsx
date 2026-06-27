@@ -37,6 +37,7 @@ import {
   CloudUpload
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
+import Draggable from "react-draggable";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../lib/firebase";
 import { doc, setDoc, getDoc } from "firebase/firestore";
@@ -99,6 +100,7 @@ export default function Editor() {
   });
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const markDirty = useCallback(() => setHasUnsavedChanges(true), []);
 
   const pushToHistory = useCallback((newObjects: CanvasObject[]) => {
@@ -744,6 +746,7 @@ export default function Editor() {
     // clear selection first
     setSelectedId(null);
     setSaving(true);
+    setIsExporting(true);
     await new Promise((r) => setTimeout(r, 100));
 
     const finalFormat = exportFormat === "image/gif" ? "image/png" : exportFormat; // fallback since dataurls for GIF are hard
@@ -761,6 +764,8 @@ export default function Editor() {
         quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
       });
     }
+    
+    setIsExporting(false);
 
     const docId = uuidv4();
     try {
@@ -1309,6 +1314,7 @@ export default function Editor() {
                       handleTransformEnd={handleTransformEnd}
                       onDblClick={onTextDblClick}
                       dragBoundFunc={dragBoundFunc}
+                      isExporting={isExporting}
                     />
                   );
                 } else if (obj.type === "image") {
@@ -1327,12 +1333,10 @@ export default function Editor() {
               })}
 
               {/* Transformer Selection */}
-              {selectedId && (
+              {selectedId && objects.find(o => o.id === selectedId)?.type === "image" && (
                 <Transformer
                   ref={trRef}
-                  keepRatio={
-                    objects.find((o) => o.id === selectedId)?.type === "image"
-                  }
+                  keepRatio={true}
                   boundBoxFunc={(oldBox, newBox) => {
                     if (
                       Math.abs(newBox.width) < 10 ||
@@ -1375,6 +1379,92 @@ export default function Editor() {
               )}
             </Layer>
           </Stage>
+
+          {/* HTML Text Overlay using react-draggable */}
+          {!isExporting && (
+            <div
+              className="absolute top-0 left-0 w-full h-full pointer-events-none"
+              style={{
+                transform: `translate(${currentStagePos.x}px, ${currentStagePos.y}px) scale(${renderScale})`,
+                transformOrigin: "0 0",
+              }}
+            >
+              {objects.map((obj) => {
+                if (obj.type === "text") {
+                  return (
+                    <Draggable
+                      key={obj.id}
+                      position={{ x: obj.x, y: obj.y }}
+                      scale={renderScale}
+                      onStart={() => setSelectedId(obj.id)}
+                      onStop={(e, data) => {
+                        const newObjs = objectsRef.current.map((o) =>
+                          o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
+                        );
+                        emitUpdate(newObjs);
+                      }}
+                    >
+                      <div
+                        className={`absolute pointer-events-auto cursor-move ${
+                          selectedId === obj.id ? "ring-2 ring-indigo-500 rounded" : ""
+                        }`}
+                        style={{
+                          fontFamily: obj.fontFamily,
+                          fontSize: `${obj.fontSize}px`,
+                          color: obj.fill,
+                          WebkitTextStroke: obj.stroke
+                            ? `${obj.strokeWidth}px ${obj.stroke}`
+                            : undefined,
+                          lineHeight: 1,
+                          whiteSpace: "pre-wrap",
+                          transform: `rotate(${obj.rotation || 0}deg)`,
+                        }}
+                        onDoubleClick={() => setEditingTextId(obj.id)}
+                      >
+                        {editingTextId === obj.id ? (
+                          <textarea
+                            autoFocus
+                            defaultValue={obj.text}
+                            onBlur={(e) => {
+                              setEditingTextId(null);
+                              const newObjs = objectsRef.current.map((o) =>
+                                o.id === obj.id
+                                  ? { ...o, text: e.target.value }
+                                  : o
+                              );
+                              emitUpdate(newObjs);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            className="bg-transparent border-none outline-none resize-none overflow-hidden m-0 p-0"
+                            style={{
+                              fontFamily: "inherit",
+                              fontSize: "inherit",
+                              color: "inherit",
+                              lineHeight: "inherit",
+                              width: obj.text ? (obj.text.length * obj.fontSize * 0.6) + 'px' : '200px',
+                            }}
+                            onInput={(e) => {
+                              e.currentTarget.style.width = '0px';
+                              e.currentTarget.style.width = (e.currentTarget.scrollWidth + 20) + 'px';
+                              e.currentTarget.style.height = '0px';
+                              e.currentTarget.style.height = (e.currentTarget.scrollHeight + 10) + 'px';
+                            }}
+                          />
+                        ) : (
+                          obj.text
+                        )}
+                      </div>
+                    </Draggable>
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
           </div>
         </div>
 
