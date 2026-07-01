@@ -1,6 +1,6 @@
 import React, { memo } from "react";
 import { Link } from "react-router";
-import { Heart } from "lucide-react";
+import { Heart, ArrowUp, ArrowDown } from "lucide-react";
 
 interface MemeTemplate {
   id: string;
@@ -17,6 +17,8 @@ interface TemplateCardProps {
   template: MemeTemplate;
   isFavorited: boolean;
   user: any;
+  votes?: { upvoters: string[]; downvoters: string[] };
+  onVote?: (templateId: string, type: 'up' | 'down' | 'clear') => void;
   onFavorite: (
     e: React.MouseEvent,
     template: MemeTemplate,
@@ -30,6 +32,8 @@ const TemplateCard = memo(
     template,
     isFavorited,
     user,
+    votes,
+    onVote,
     onFavorite,
     onMarkRecent,
   }: TemplateCardProps) => {
@@ -38,6 +42,13 @@ const TemplateCard = memo(
     React.useEffect(() => {
       setImgSrc(template.url);
     }, [template.url]);
+
+    const upvotes = votes?.upvoters?.length || 0;
+    const downvotes = votes?.downvoters?.length || 0;
+    const score = upvotes - downvotes;
+
+    const hasUpvoted = user && votes?.upvoters?.includes(user.uid);
+    const hasDownvoted = user && votes?.downvoters?.includes(user.uid);
 
     return (
       <div className="group relative rounded-3xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 bg-zinc-900 border border-white/10 flex flex-col hover:border-indigo-500/50" style={{ contentVisibility: "auto", containIntrinsicSize: "200px" }}>
@@ -60,7 +71,6 @@ const TemplateCard = memo(
               }
             }}
             alt={template.name}
-            loading="lazy"
             decoding="async"
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
           />
@@ -80,16 +90,43 @@ const TemplateCard = memo(
           </button>
         )}
 
-        <Link
-          to={`/editor/template_${template.id}`}
-          state={{ template }}
-          onClick={() => onMarkRecent(template.id)}
-          className="p-4 bg-zinc-900 flex-grow flex items-center justify-center border-t border-white/5"
-        >
-          <p className="text-[10px] font-bold text-zinc-300 line-clamp-1 uppercase tracking-widest text-center">
-            {template.name}
-          </p>
-        </Link>
+        <div className="p-4 bg-zinc-900 flex-grow flex flex-col justify-center border-t border-white/5 relative">
+          <Link
+            to={`/editor/template_${template.id}`}
+            state={{ template }}
+            onClick={() => onMarkRecent(template.id)}
+            className="flex-grow flex items-center justify-center pr-16"
+          >
+            <p className="text-[10px] font-bold text-zinc-300 line-clamp-1 uppercase tracking-widest text-center">
+              {template.name}
+            </p>
+          </Link>
+
+          {/* Voting UI */}
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 bg-zinc-950/50 rounded-full px-2 py-1 border border-white/5">
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                onVote?.(template.id, hasUpvoted ? 'clear' : 'up');
+              }}
+              className={`hover:text-indigo-400 transition-colors ${hasUpvoted ? 'text-indigo-500' : 'text-zinc-500'}`}
+            >
+              <ArrowUp className="w-3.5 h-3.5" strokeWidth={hasUpvoted ? 3 : 2} />
+            </button>
+            <span className={`text-[10px] font-bold min-w-[1ch] text-center ${score > 0 ? 'text-indigo-400' : score < 0 ? 'text-rose-400' : 'text-zinc-400'}`}>
+              {score}
+            </span>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                onVote?.(template.id, hasDownvoted ? 'clear' : 'down');
+              }}
+              className={`hover:text-rose-400 transition-colors ${hasDownvoted ? 'text-rose-500' : 'text-zinc-500'}`}
+            >
+              <ArrowDown className="w-3.5 h-3.5" strokeWidth={hasDownvoted ? 3 : 2} />
+            </button>
+          </div>
+        </div>
       </div>
     );
   },

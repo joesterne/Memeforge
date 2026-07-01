@@ -90,6 +90,40 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(favoriteId) && existing().userId == request.auth.uid;
     }
 
+    function isValidCustomTemplate(data) {
+      return data.keys().hasAll(['userId', 'userName', 'url', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userName is string &&
+             data.url is string &&
+             data.url.size() <= 100000 &&
+             data.name is string &&
+             data.width is number &&
+             data.height is number &&
+             data.box_count is number &&
+             data.createdAt is string;
+    }
+
+    match /templates/{templateId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidCustomTemplate(incoming());
+      allow update: if isSignedIn() && existing().userId == request.auth.uid && isValidCustomTemplate(incoming());
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    function isValidTemplateVote(data) {
+      return data.keys().hasAll(['upvoters', 'downvoters']) &&
+             data.upvoters is list &&
+             data.downvoters is list;
+    }
+
+    match /templateVotes/{templateId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidTemplateVote(incoming());
+      allow update: if isSignedIn() && isValidTemplateVote(incoming());
+      allow delete: if false;
+    }
+
     match /submissions/{submissionId} {
       // List/read only allowed for own submissions to prevent data exposure (OWASP Broken Access Control)
       allow read: if isSignedIn() && isValidId(submissionId) && resource.data.userId == request.auth.uid;

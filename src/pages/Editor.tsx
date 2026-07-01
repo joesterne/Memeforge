@@ -51,6 +51,7 @@ import Konva from "konva";
 import type { CanvasObject } from "../types/canvas";
 import { CanvasImage, CanvasText, AIPromptInput, AIMemeChatInput } from "../components/editor/CanvasElements";
 import { saveRecentCreation } from "../lib/localStorage";
+import { useVotes } from "../contexts/VotesContext";
 
 export default function Editor() {
   const { id } = useParams();
@@ -58,6 +59,15 @@ export default function Editor() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const template = location.state?.template;
+  
+  const { votes, handleVote } = useVotes();
+  const templateId = template?.id || id?.replace("template_", "");
+  const templateVotes = templateId ? votes[templateId] : undefined;
+  const upvotes = templateVotes?.upvoters?.length || 0;
+  const downvotes = templateVotes?.downvoters?.length || 0;
+  const score = upvotes - downvotes;
+  const hasUpvoted = user && templateVotes?.upvoters?.includes(user.uid);
+  const hasDownvoted = user && templateVotes?.downvoters?.includes(user.uid);
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [objects, setObjects] = useState<CanvasObject[]>([]);
@@ -1471,9 +1481,36 @@ export default function Editor() {
         {/* Sidebar Tooling */}
         <div className="w-full md:w-80 bg-zinc-900 shadow-2xl border border-white/10 rounded-3xl p-5 flex flex-col gap-6 overflow-y-auto">
           <div>
-            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">
-              Toolbar
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">
+                Toolbar
+              </h3>
+              {templateId && (
+                <div className="flex items-center gap-1.5 bg-zinc-950/50 rounded-full px-2 py-1 border border-white/5">
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleVote(templateId, hasUpvoted ? 'clear' : 'up');
+                    }}
+                    className={`hover:text-indigo-400 transition-colors ${hasUpvoted ? 'text-indigo-500' : 'text-zinc-500'}`}
+                  >
+                    <ArrowUp className="w-3.5 h-3.5" strokeWidth={hasUpvoted ? 3 : 2} />
+                  </button>
+                  <span className={`text-[10px] font-bold min-w-[1ch] text-center ${score > 0 ? 'text-indigo-400' : score < 0 ? 'text-rose-400' : 'text-zinc-400'}`}>
+                    {score}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleVote(templateId, hasDownvoted ? 'clear' : 'down');
+                    }}
+                    className={`hover:text-rose-400 transition-colors ${hasDownvoted ? 'text-rose-500' : 'text-zinc-500'}`}
+                  >
+                    <ArrowDown className="w-3.5 h-3.5" strokeWidth={hasDownvoted ? 3 : 2} />
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div className="flex flex-col gap-3">
               <div className="mb-4">

@@ -7,6 +7,7 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Route, Routes } from "react-router";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { VotesProvider } from "./contexts/VotesContext";
 import Navbar from "./components/Navbar";
 import { Toaster } from "sonner";
 
@@ -31,21 +32,23 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <BrowserRouter>
-          <div className="h-screen bg-slate-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 font-sans flex flex-col overflow-hidden transition-colors duration-300">
-            <Navbar />
-            <main id="main-scroll-container" className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 overflow-y-auto">
-              <Suspense fallback={<LoadingSkeleton />}>
-                <Routes>
-                  <Route path="/" element={<Home />} />
-                  <Route path="/editor/:id" element={<Editor />} />
-                  <Route path="/profile" element={<Profile />} />
-                </Routes>
-              </Suspense>
-            </main>
-          </div>
-          <Toaster richColors position="top-right" />
-        </BrowserRouter>
+        <VotesProvider>
+          <BrowserRouter>
+            <div className="h-screen bg-slate-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 font-sans flex flex-col overflow-hidden transition-colors duration-300">
+              <Navbar />
+              <main id="main-scroll-container" className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 overflow-y-auto">
+                <Suspense fallback={<LoadingSkeleton />}>
+                  <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/editor/:id" element={<Editor />} />
+                    <Route path="/profile" element={<Profile />} />
+                  </Routes>
+                </Suspense>
+              </main>
+            </div>
+            <Toaster richColors position="top-right" />
+          </BrowserRouter>
+        </VotesProvider>
       </AuthProvider>
     </ThemeProvider>
   );

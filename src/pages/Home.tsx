@@ -36,9 +36,11 @@ import {
 } from "../lib/firebaseErrorHandler";
 import SearchBar from "../components/SearchBar";
 import TemplateCard from "../components/TemplateCard";
+import UploadTemplateModal from "../components/UploadTemplateModal";
 import { InfiniteScrollLoader } from "../components/InfiniteScrollLoader";
 import { toast } from "sonner";
 import { getRecentCreations, deleteRecentCreation, RecentMeme } from "../lib/localStorage";
+import { useVotes } from "../contexts/VotesContext";
 
 interface MemeTemplate {
   id: string;
@@ -51,7 +53,7 @@ interface MemeTemplate {
   dateAdded?: string;
 }
 
-type SortOption = "trending" | "recent" | "new" | "date_added" | "favorites";
+type SortOption = "trending" | "recent" | "new" | "date_added" | "favorites" | "rating";
 
 // Simple memory cache for memes
 let cachedMemes: MemeTemplate[] | null = null;
@@ -59,6 +61,7 @@ let cachedTrends: string[] | null = null;
 
 export default function Home() {
   const { user } = useAuth();
+  const { votes, handleVote } = useVotes();
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<MemeTemplate[]>(cachedMemes || []);
   const [search, setSearch] = useState("");
@@ -147,6 +150,7 @@ export default function Home() {
 
   const [favorites, setFavorites] = useState<Record<string, any>>({});
   const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   useEffect(() => {
     setRecentCreations(getRecentCreations());
@@ -223,15 +227,30 @@ export default function Home() {
             for (const term of trendsList) {
               if (lowerName.includes(term.toLowerCase())) matchCount++;
             }
-            // Add a small random factor if forced to change up the order of ties
             return matchCount + (force ? Math.random() * 0.5 : 0);
           };
           memes.sort(
             (a: any, b: any) => boostScore(b.name) - boostScore(a.name),
           );
         } else if (force) {
-          // If no trends but forced refresh, just mildly shuffle
           memes.sort(() => Math.random() - 0.5);
+        }
+
+        // Fetch custom templates from Firestore
+        if (db && db.app.options.projectId !== "MOCK") {
+          try {
+            const snaps = await getDocs(collection(db, "templates"));
+            const customTemplates = snaps.docs.map(doc => ({
+              id: doc.id,
+              ...doc.data(),
+              dateAdded: doc.data().createdAt || new Date().toISOString()
+            })) as MemeTemplate[];
+            
+            // Prepend custom templates
+            memes = [...customTemplates, ...memes];
+          } catch (err) {
+            console.error("Error fetching custom templates:", err);
+          }
         }
 
         cachedMemes = memes;
@@ -528,6 +547,13 @@ export default function Home() {
               new Date(a.dateAdded!).getTime(),
           );
           break;
+        case "rating":
+          result.sort((a, b) => {
+            const scoreA = ((votes[a.id]?.upvoters?.length || 0) - (votes[a.id]?.downvoters?.length || 0));
+            const scoreB = ((votes[b.id]?.upvoters?.length || 0) - (votes[b.id]?.downvoters?.length || 0));
+            return scoreB - scoreA;
+          });
+          break;
         case "trending":
         default:
           // imgflip default order is trending
@@ -583,6 +609,13 @@ export default function Home() {
               new Date(b.dateAdded!).getTime() -
               new Date(a.dateAdded!).getTime(),
           );
+          break;
+        case "rating":
+          result.sort((a, b) => {
+            const scoreA = ((votes[a.id]?.upvoters?.length || 0) - (votes[a.id]?.downvoters?.length || 0));
+            const scoreB = ((votes[b.id]?.upvoters?.length || 0) - (votes[b.id]?.downvoters?.length || 0));
+            return scoreB - scoreA;
+          });
           break;
         case "trending":
         default:
@@ -800,6 +833,7 @@ export default function Home() {
               >
                 <option value="trending">Trending</option>
                 {user && <option value="favorites">Favorites</option>}
+                <option value="rating">Top Rated</option>
                 <option value="recent">Recently Clicked</option>
                 <option value="new">New</option>
                 <option value="date_added">Date Added</option>
@@ -821,8 +855,14 @@ export default function Home() {
               to="/editor/new"
               className="hidden lg:flex items-center gap-2 px-4 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 font-bold text-[11px] uppercase tracking-wider transition-colors text-zinc-300"
             >
-              <Upload className="w-4 h-4" /> Use Blank
+              <ImageIcon className="w-4 h-4" /> Use Blank
             </Link>
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="hidden lg:flex items-center gap-2 px-4 py-2 bg-indigo-600/20 border border-indigo-500/30 rounded-lg hover:bg-indigo-600/40 font-bold text-[11px] uppercase tracking-wider transition-colors text-indigo-300"
+            >
+              <Upload className="w-4 h-4" /> Upload
+            </button>
           </div>
         </div>
       )}
@@ -875,6 +915,8 @@ export default function Home() {
                 template={t}
                 isFavorited={!!favorites[t.id]}
                 user={user}
+                votes={votes[t.id]}
+                onVote={handleVote}
                 onFavorite={toggleFavorite}
                 onMarkRecent={markRecent}
               />
@@ -898,6 +940,7 @@ export default function Home() {
               >
                 <option value="trending">Trending</option>
                 {user && <option value="favorites">Favorites</option>}
+                <option value="rating">Top Rated</option>
                 <option value="recent">Recently Clicked</option>
                 <option value="new">New</option>
                 <option value="date_added">Date Added</option>
@@ -941,8 +984,14 @@ export default function Home() {
               to="/editor/new"
               className="hidden lg:flex items-center gap-2 px-4 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 font-bold text-[11px] uppercase tracking-wider transition-colors text-zinc-300"
             >
-              <Upload className="w-4 h-4" /> Use Blank
+              <ImageIcon className="w-4 h-4" /> Use Blank
             </Link>
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="hidden lg:flex items-center gap-2 px-4 py-2 bg-indigo-600/20 border border-indigo-500/30 rounded-lg hover:bg-indigo-600/40 font-bold text-[11px] uppercase tracking-wider transition-colors text-indigo-300"
+            >
+              <Upload className="w-4 h-4" /> Upload
+            </button>
           </div>
         </div>
       )}
@@ -995,6 +1044,8 @@ export default function Home() {
                 template={t}
                 isFavorited={!!favorites[t.id]}
                 user={user}
+                votes={votes[t.id]}
+                onVote={handleVote}
                 onFavorite={toggleFavorite}
                 onMarkRecent={markRecent}
               />
@@ -1007,6 +1058,16 @@ export default function Home() {
           hasMore={!!nextGifPos}
           loading={loadingGifs}
           onLoadMore={fetchMoreGifs}
+        />
+      )}
+      {showUploadModal && (
+        <UploadTemplateModal
+          isOpen={showUploadModal}
+          onClose={() => setShowUploadModal(false)}
+          onUploadSuccess={(template) => {
+            setTemplates((prev) => [template, ...prev]);
+            toast.success("Template added to library!");
+          }}
         />
       )}
     </div>

@@ -21,7 +21,7 @@ appleProvider.addScope('name');
 
 try {
   app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
+  db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID || "ai-studio-memeforge-e89538b2-29ed-46d4-bae0-da32b129d8ed");
   auth = getAuth(app);
 } catch (e) {
   console.error("Firebase init failed:", e);
