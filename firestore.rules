@@ -65,6 +65,51 @@ service cloud.firestore {
              data.createdAt.size() <= 50;
     }
 
+    function isValidCustomTemplate(data) {
+      return data.keys().hasAll(['userId', 'userName', 'url', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
+             data.keys().size() == 8 &&
+             data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.userName is string &&
+             data.userName.size() <= 100 &&
+             data.url is string &&
+             data.url.size() <= 100000 &&
+             data.name is string &&
+             data.name.size() <= 100 &&
+             data.width is number &&
+             data.height is number &&
+             data.box_count is number &&
+             data.createdAt is string &&
+             data.createdAt.size() <= 50;
+    }
+    
+    function isValidCustomTemplateUpdate(data) {
+      return data.keys().hasAll(['userId', 'userName', 'url', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
+             data.keys().size() == 8 &&
+             data.userId is string &&
+             data.userId == existing().userId &&
+             data.userName is string &&
+             data.userName.size() <= 100 &&
+             data.url is string &&
+             data.url.size() <= 100000 &&
+             data.name is string &&
+             data.name.size() <= 100 &&
+             data.width is number &&
+             data.height is number &&
+             data.box_count is number &&
+             data.createdAt is string &&
+             data.createdAt == existing().createdAt;
+    }
+
+    function isValidTemplateVote(data) {
+      return data.keys().hasAll(['upvoters', 'downvoters']) &&
+             data.keys().size() == 2 &&
+             data.upvoters is list &&
+             data.upvoters.size() <= 10000 &&
+             data.downvoters is list &&
+             data.downvoters.size() <= 10000;
+    }
+
     // 3. Collection Rules
     match /memes/{memeId} {
       // Anyone can read a meme (for sharing)
@@ -83,50 +128,36 @@ service cloud.firestore {
     
     // Favorites rules
     match /favorites/{favoriteId} {
-      allow read: if isSignedIn() && isValidId(favoriteId) && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(favoriteId) && resource.data.userId == request.auth.uid;
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn() && isValidId(favoriteId) && isValidFavorite(incoming());
       allow update: if false; // Favorites shouldn't be updated, just created or deleted
       allow delete: if isSignedIn() && isValidId(favoriteId) && existing().userId == request.auth.uid;
     }
 
-    function isValidCustomTemplate(data) {
-      return data.keys().hasAll(['userId', 'userName', 'url', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
-             data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.userName is string &&
-             data.url is string &&
-             data.url.size() <= 100000 &&
-             data.name is string &&
-             data.width is number &&
-             data.height is number &&
-             data.box_count is number &&
-             data.createdAt is string;
-    }
-
     match /templates/{templateId} {
-      allow read: if true;
-      allow create: if isSignedIn() && isValidCustomTemplate(incoming());
-      allow update: if isSignedIn() && existing().userId == request.auth.uid && isValidCustomTemplate(incoming());
-      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
-    }
-
-    function isValidTemplateVote(data) {
-      return data.keys().hasAll(['upvoters', 'downvoters']) &&
-             data.upvoters is list &&
-             data.downvoters is list;
+      allow get: if isValidId(templateId);
+      allow list: if resource.data.userId is string; // Enforce that we are querying resources with userIds
+      allow create: if isSignedIn() && isValidId(templateId) && isValidCustomTemplate(incoming());
+      allow update: if isSignedIn() && isValidId(templateId) && existing().userId == request.auth.uid && isValidCustomTemplateUpdate(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'name', 'url', 'width', 'height', 'box_count'])
+      );
+      allow delete: if isSignedIn() && isValidId(templateId) && existing().userId == request.auth.uid;
     }
 
     match /templateVotes/{templateId} {
-      allow read: if true;
-      allow create: if isSignedIn() && isValidTemplateVote(incoming());
-      allow update: if isSignedIn() && isValidTemplateVote(incoming());
+      allow get: if isValidId(templateId);
+      allow list: if resource.data.upvoters is list;
+      allow create: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming());
+      allow update: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['upvoters', 'downvoters'])
+      );
       allow delete: if false;
     }
 
     match /submissions/{submissionId} {
       // List/read only allowed for own submissions to prevent data exposure (OWASP Broken Access Control)
-      allow read: if isSignedIn() && isValidId(submissionId) && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && isValidId(submissionId) && resource.data.userId == request.auth.uid;
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn() && isValidId(submissionId) && isValidSubmission(incoming());
       allow update: if false; // Submissions are immutable

@@ -3,6 +3,7 @@ import { db } from "../lib/firebase";
 import { collection, onSnapshot, doc, setDoc, updateDoc, arrayUnion, arrayRemove, getDoc } from "firebase/firestore";
 import { useAuth } from "./AuthContext";
 import { toast } from "sonner";
+import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
 
 interface TemplateVotes {
   upvoters: string[];
@@ -39,8 +40,8 @@ export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
         setLoading(false);
       },
       (error) => {
-        console.error("Error fetching votes:", error);
         setLoading(false);
+        handleFirestoreError(error, OperationType.GET, "templateVotes");
       }
     );
 
@@ -89,8 +90,7 @@ export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
         }
       }
     } catch (err) {
-      console.error("Error voting:", err);
-      toast.error("Failed to record vote");
+      handleFirestoreError(err, OperationType.WRITE, `templateVotes/${templateId}`);
     }
   };
 

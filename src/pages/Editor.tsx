@@ -343,9 +343,10 @@ export default function Editor() {
         );
         setHasUnsavedChanges(false);
       } catch (err) {
-         console.error("Auto-save failed:", err);
+         handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
+      } finally {
+         setSaving(false);
       }
-      setSaving(false);
     }, 2000); // 2 second delay of inactivity
     
     return () => clearTimeout(timer);
@@ -818,8 +819,9 @@ export default function Editor() {
       navigate(`/editor/${newTemplateId}`);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `memes/${newTemplateId}`);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const saveToFirebase = async () => {
@@ -850,8 +852,9 @@ export default function Editor() {
       toast.success("Saved successfully!");
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const deleteSelected = () => {

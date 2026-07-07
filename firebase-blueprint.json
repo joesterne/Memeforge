@@ -57,6 +57,32 @@
         "createdAt": { "type": "string" }
       },
       "required": ["userId", "userName", "memeUrl", "createdAt"]
+    },
+    "Template": {
+      "title": "Template",
+      "description": "A custom user template",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "url": { "type": "string" },
+        "name": { "type": "string" },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "box_count": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "userName", "url", "name", "width", "height", "box_count", "createdAt"]
+    },
+    "TemplateVote": {
+      "title": "TemplateVote",
+      "description": "Upvotes and downvotes for a template",
+      "type": "object",
+      "properties": {
+        "upvoters": { "type": "array", "items": { "type": "string" } },
+        "downvoters": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["upvoters", "downvoters"]
     }
   },
   "firestore": {
@@ -71,6 +97,14 @@
     "/submissions/{submissionId}": {
       "schema": "#/entities/Submission",
       "description": "User submitted memes"
+    },
+    "/templates/{templateId}": {
+      "schema": "#/entities/Template",
+      "description": "Custom templates"
+    },
+    "/templateVotes/{templateId}": {
+      "schema": "#/entities/TemplateVote",
+      "description": "Votes for templates"
     }
   }
 }

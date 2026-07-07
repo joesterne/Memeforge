@@ -249,7 +249,7 @@ export default function Home() {
             // Prepend custom templates
             memes = [...customTemplates, ...memes];
           } catch (err) {
-            console.error("Error fetching custom templates:", err);
+            handleFirestoreError(err, OperationType.LIST, "templates");
           }
         }
 
@@ -430,9 +430,10 @@ export default function Home() {
         setFavorites(favsMap);
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, "userdata");
+      } finally {
+        setMemesLoading(false);
+        setFavoritesLoading(false);
       }
-      setMemesLoading(false);
-      setFavoritesLoading(false);
     };
     fetchUserData();
   }, [user]);

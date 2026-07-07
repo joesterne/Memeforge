@@ -4,6 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { db } from "../lib/firebase";
 import { collection, doc, setDoc } from "firebase/firestore";
 import { toast } from "sonner";
+import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
 import imageCompression from "browser-image-compression";
 
 interface UploadTemplateModalProps {
@@ -43,59 +44,60 @@ export default function UploadTemplateModal({
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!user) {
       toast.error("You must be logged in to upload templates.");
       return;
     }
+
     if (!file || !name) {
       toast.error("Please provide a name and an image.");
       return;
     }
 
     setLoading(true);
+
     try {
-      // Compress image aggressively to fit in Firestore (target ~90KB)
       const options = {
-        maxSizeMB: 0.08, // 80KB
+        maxSizeMB: 0.08,
         maxWidthOrHeight: 800,
         useWebWorker: true,
       };
       const compressedFile = await imageCompression(file, options);
       
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64data = reader.result as string;
-        
-        // Get image dimensions
+      const base64data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(compressedFile);
+      });
+      
+      const { width, height } = await new Promise<{width: number, height: number}>((resolve, reject) => {
         const img = new Image();
-        img.onload = async () => {
-          const width = img.width;
-          const height = img.height;
-          
-          const newTemplate = {
-            userId: user.uid,
-            userName: user.displayName || "Anonymous",
-            name,
-            url: base64data,
-            width,
-            height,
-            box_count: 2,
-            createdAt: new Date().toISOString(),
-          };
-
-          const newDocRef = doc(collection(db, "templates"));
-          await setDoc(newDocRef, newTemplate);
-          
-          toast.success("Template uploaded successfully!");
-          onUploadSuccess({ id: newDocRef.id, ...newTemplate });
-          onClose();
-        };
+        img.onload = () => resolve({ width: img.width, height: img.height });
+        img.onerror = reject;
         img.src = base64data;
+      });
+
+      const newTemplate = {
+        userId: user.uid,
+        userName: user.displayName || "Anonymous",
+        name,
+        url: base64data,
+        width,
+        height,
+        box_count: 2,
+        createdAt: new Date().toISOString(),
       };
-      reader.readAsDataURL(compressedFile);
+      
+      const newDocRef = doc(collection(db, "templates"));
+      await setDoc(newDocRef, newTemplate);
+      
+      toast.success("Template uploaded successfully!");
+      onUploadSuccess({ id: newDocRef.id, ...newTemplate });
+      onClose();
     } catch (err: any) {
-      console.error(err);
-      toast.error("Failed to upload template.");
+      handleFirestoreError(err, OperationType.WRITE, "templates");
     } finally {
       setLoading(false);
     }
@@ -110,7 +112,9 @@ export default function UploadTemplateModal({
         >
           <X className="w-5 h-5" />
         </button>
+
         <h2 className="text-xl font-semibold text-white mb-6">Upload Template</h2>
+
         <form onSubmit={handleUpload} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-1">
@@ -125,6 +129,7 @@ export default function UploadTemplateModal({
               required
             />
           </div>
+
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-1">
               Image
@@ -162,6 +167,7 @@ export default function UploadTemplateModal({
               </div>
             </div>
           </div>
+
           <button
             type="submit"
             disabled={loading}

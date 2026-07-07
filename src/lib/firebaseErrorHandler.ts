@@ -27,7 +27,7 @@ export interface FirestoreErrorInfo {
   }
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null, shouldThrow: boolean = false) {
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
     error: errorMessage,
@@ -45,7 +45,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
-  console.error('Firestore Error: ', errInfo);
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
   
   if (errorMessage.includes('permission-denied') || errorMessage.includes('Missing or insufficient permissions')) {
     toast.error("Permission denied. You do not have access to this resource.");
@@ -53,7 +53,5 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     toast.error(`Database error during ${operationType}: ${errorMessage}`);
   }
   
-  if (shouldThrow) {
-    throw error;
-  }
+  throw new Error(JSON.stringify(errInfo));
 }

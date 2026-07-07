@@ -34,8 +34,9 @@ export default function Profile() {
         setHistory(data);
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, "memes");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
     fetchHistory();
   }, [user]);
