@@ -346,7 +346,10 @@ app.get("/api/search-gifs", async (req, res) => {
       if (!text) return res.status(400).json({ error: "Text is required" });
 
       const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
         contents: `You are an expert meme creator. The user wants a meme about: ${text}. 
@@ -384,8 +387,13 @@ app.get("/api/search-gifs", async (req, res) => {
 
       res.json({ success: true, memeDraft: data });
     } catch (error: any) {
-      console.error("AI Chat-to-Meme error:", error, "Body:", req.body);
-      res.status(500).json({ success: false, error: "An unexpected error occurred during AI chat generation. Please try again later." });
+      const errMsg = error.message || error.toString() || "Unknown error";
+      console.error("AI Chat-to-Meme error:", errMsg, "Body:", req.body);
+      let userMsg = errMsg;
+      if (typeof userMsg === 'string' && userMsg.includes("dunning decision")) {
+        userMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+      }
+      res.status(500).json({ success: false, error: userMsg });
     }
   });
 
@@ -395,9 +403,12 @@ app.get("/api/search-gifs", async (req, res) => {
       if (!text) return res.status(400).json({ error: "Text is required" });
 
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ 
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-image",
+        model: "gemini-3.1-flash-lite-image",
         contents: {
           parts: [
             {
@@ -428,8 +439,13 @@ app.get("/api/search-gifs", async (req, res) => {
           .json({ success: false, error: "Failed to generate image" });
       }
     } catch (error: any) {
-      console.error("AI Generation error:", error, "Body:", req.body);
-      res.status(500).json({ success: false, error: "An unexpected error occurred during AI generation. Please try again later." });
+      const errMsg = error.message || error.toString() || "Unknown error";
+      console.error("AI Generation error:", errMsg, "Body:", req.body);
+      let userMsg = errMsg;
+      if (typeof userMsg === 'string' && userMsg.includes("dunning decision")) {
+        userMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+      }
+      res.status(500).json({ success: false, error: userMsg });
     }
   });
 

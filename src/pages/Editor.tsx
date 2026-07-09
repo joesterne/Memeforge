@@ -599,7 +599,7 @@ export default function Editor() {
       });
       clearTimeout(timeoutId);
 
-      if (!res.ok) throw new Error("AI Generator request failed");
+      if (!res.ok) { const errorData = await res.json().catch(() => null); let errMsg = errorData?.error || "AI Generator request failed"; if (errMsg && typeof errMsg === "string" && errMsg.includes("dunning decision")) { errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings."; } throw new Error(errMsg); }
 
       const data = await res.json();
       if (data.success && data.imageUrl) {
@@ -612,7 +612,7 @@ export default function Editor() {
       if (e.name === "AbortError") {
         toast.error("AI Generation timed out. Please try again.");
       } else {
-        toast.error("Error generating image.");
+        toast.error(e.message || "Error generating image.");
       }
     } finally {
       setGeneratingAI(false);
