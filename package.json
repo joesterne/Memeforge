@@ -23,7 +23,6 @@
     "express-rate-limit": "^8.5.2",
     "firebase": "^12.13.0",
     "google-trends-api": "^4.9.2",
-    "googlethis": "^1.8.0",
     "helmet": "^8.2.0",
     "html-to-image": "^1.11.13",
     "konva": "^10.3.0",
