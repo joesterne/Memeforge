@@ -24,6 +24,93 @@ function getStripe(): Stripe {
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+function getRequiredSecret(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} environment variable is required`);
+  }
+  return value;
+}
+
+function getGeminiApiKey(): string {
+  return getRequiredSecret("GEMINI_API_KEY");
+}
+
+function getTenorApiKey(): string {
+  return getRequiredSecret("TENOR_API_KEY");
+}
+
+function getAiErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("dunning decision")) {
+    return "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+  }
+  if (message.includes("GEMINI_API_KEY")) {
+    return "Gemini API is not configured. Please add GEMINI_API_KEY to the server environment.";
+  }
+  return "An unexpected error occurred while generating AI content. Please try again later.";
+}
+
+const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
+const MAX_CACHE_ENTRIES = 100;
+const MAX_QUERY_LENGTH = 80;
+const MAX_SOCKET_ROOMS = 500;
+const MAX_ROOM_OBJECTS = 250;
+const MAX_USER_NAME_LENGTH = 80;
+const FALLBACK_TRENDS = [
+  "drake",
+  "kendrick",
+  "nba",
+  "gta 6",
+  "ai",
+  "taylor swift",
+  "marvel",
+  "apple",
+  "doge",
+  "memes",
+];
+
+function getClientOrigin(): string | string[] | boolean {
+  return process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean)
+    : process.env.NODE_ENV === "production"
+      ? process.env.APP_URL || false
+      : ["http://localhost:3000", "http://localhost:5173"];
+}
+
+function normalizeQuery(input: unknown): string {
+  const value = Array.isArray(input) ? input[0] : input;
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/g, " ").slice(0, MAX_QUERY_LENGTH);
+}
+
+function setBoundedCache<T>(cache: Map<string, { data: T; timestamp: number }>, key: string, data: T) {
+  if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey) cache.delete(oldestKey);
+  }
+  cache.set(key, { data, timestamp: Date.now() });
+}
+
+function getCached<T>(cache: Map<string, { data: T; timestamp: number }>, key: string): T | null {
+  const cached = cache.get(key);
+  if (!cached || Date.now() - cached.timestamp >= CACHE_DURATION_MS) return null;
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached.data;
+}
+
+function isSafeRoomId(roomId: unknown): roomId is string {
+  return typeof roomId === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(roomId);
+}
+
+function sanitizeSocketUser(user: any) {
+  return {
+    id: typeof user?.id === "string" ? user.id.slice(0, MAX_USER_NAME_LENGTH) : undefined,
+    name: typeof user?.name === "string" ? user.name.slice(0, MAX_USER_NAME_LENGTH) : "Guest",
+  };
+}
+
 async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
@@ -56,7 +143,7 @@ async function startServer() {
   app.use("/api/", apiLimiter);
 
   const io = new Server(httpServer, {
-    cors: { origin: "*" },
+    cors: { origin: getClientOrigin(), methods: ["GET", "POST"] },
   });
 
   // Socket.io for Real-Time Collaboration
@@ -65,21 +152,23 @@ async function startServer() {
 
   io.on("connection", (socket) => {
     socket.on("join-room", (roomId: string, user: any) => {
+      if (!isSafeRoomId(roomId) || Object.keys(rooms).length >= MAX_SOCKET_ROOMS) return;
       socket.join(roomId);
       if (!rooms[roomId]) {
         rooms[roomId] = { objects: [], users: {} };
       }
-      rooms[roomId].users[socket.id] = user;
+      const safeUser = sanitizeSocketUser(user);
+      rooms[roomId].users[socket.id] = safeUser;
 
       socket.emit("room-state", rooms[roomId]);
-      socket.to(roomId).emit("user-joined", { id: socket.id, user });
+      socket.to(roomId).emit("user-joined", { id: socket.id, user: safeUser });
     });
 
     socket.on("canvas-update", (roomId: string, data: any) => {
-      if (rooms[roomId]) {
-        // simplistic overwrite for now
-        rooms[roomId].objects = data;
-        socket.to(roomId).emit("canvas-updated", data);
+      if (isSafeRoomId(roomId) && rooms[roomId] && Array.isArray(data)) {
+        // simplistic overwrite for now, capped to bound memory and broadcast size
+        rooms[roomId].objects = data.slice(0, MAX_ROOM_OBJECTS);
+        socket.to(roomId).emit("canvas-updated", rooms[roomId].objects);
       }
     });
 
@@ -88,6 +177,9 @@ async function startServer() {
         if (rooms[roomId].users[socket.id]) {
           delete rooms[roomId].users[socket.id];
           io.to(roomId).emit("user-left", socket.id);
+          if (Object.keys(rooms[roomId].users).length === 0) {
+            delete rooms[roomId];
+          }
         }
       }
     });
@@ -101,7 +193,7 @@ async function startServer() {
   app.get("/api/test-gemini", async (req, res) => {
     try {
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
         contents: "Hello",
@@ -114,7 +206,6 @@ async function startServer() {
   });
 
 let cachedTrends: { data: string[]; timestamp: number } | null = null;
-const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
 
 app.get("/api/trending-searches", async (req, res) => {
   const force = req.query.force === "true";
@@ -137,18 +228,7 @@ app.get("/api/trending-searches", async (req, res) => {
       console.warn(
         "Google Trends returned invalid JSON (likely rate limited or blocked). Using fallback.",
       );
-      const terms = [
-        "drake",
-        "kendrick",
-        "nba",
-        "gta 6",
-        "ai",
-        "taylor swift",
-        "marvel",
-        "apple",
-        "doge",
-        "memes",
-      ];
+      const terms = FALLBACK_TRENDS;
       cachedTrends = { data: terms, timestamp: Date.now() };
       return res.json({ success: true, terms });
     }
@@ -163,36 +243,14 @@ app.get("/api/trending-searches", async (req, res) => {
     }
 
     if (terms.length === 0) {
-      terms = [
-        "drake",
-        "kendrick",
-        "nba",
-        "gta 6",
-        "ai",
-        "taylor swift",
-        "marvel",
-        "apple",
-        "doge",
-        "memes",
-      ];
+      terms = FALLBACK_TRENDS;
     }
 
     cachedTrends = { data: terms, timestamp: Date.now() };
     res.json({ success: true, terms });
   } catch (error: any) {
     console.warn("Google Trends Error:", error);
-    const fallbackTerms = [
-      "drake",
-      "kendrick",
-      "nba",
-      "gta 6",
-      "ai",
-      "taylor swift",
-      "marvel",
-      "apple",
-      "doge",
-      "memes",
-    ];
+    const fallbackTerms = FALLBACK_TRENDS;
     cachedTrends = { data: fallbackTerms, timestamp: Date.now() };
     res.json({
       success: true,
@@ -207,12 +265,13 @@ const memeSearchCache = new Map<string, { data: any[]; timestamp: number }>();
 
 app.get("/api/search-memes", async (req, res) => {
   try {
-    const q = req.query.q as string;
+    const q = normalizeQuery(req.query.q);
     const force = req.query.force === "true";
     if (!q) return res.json({ success: true, memes: [] });
 
-    if (!force && memeSearchCache.has(q) && Date.now() - memeSearchCache.get(q)!.timestamp < CACHE_DURATION_MS) {
-      return res.json({ success: true, memes: memeSearchCache.get(q)!.data, cached: true });
+    const cached = !force ? getCached(memeSearchCache, q) : null;
+    if (cached) {
+      return res.json({ success: true, memes: cached, cached: true });
     }
 
     const response = await fetch(
@@ -248,7 +307,7 @@ app.get("/api/search-memes", async (req, res) => {
       count++;
     }
 
-    memeSearchCache.set(q, { data: memes, timestamp: Date.now() });
+    setBoundedCache(memeSearchCache, q, memes);
     res.json({ success: true, memes });
   } catch (error: any) {
     console.error("Search error:", error, "Query:", req.query.q);
@@ -260,17 +319,18 @@ const googleGifCache = new Map<string, { data: any[]; timestamp: number }>();
 
 app.get("/api/search-google-gifs", async (req, res) => {
   try {
-    const q = req.query.q as string;
+    const q = normalizeQuery(req.query.q);
     const force = req.query.force === "true";
     if (!q) return res.json({ success: true, gifs: [] });
 
-    if (!force && googleGifCache.has(q) && Date.now() - googleGifCache.get(q)!.timestamp < CACHE_DURATION_MS) {
-      return res.json({ success: true, gifs: googleGifCache.get(q)!.data, cached: true });
+    const cached = !force ? getCached(googleGifCache, q) : null;
+    if (cached) {
+      return res.json({ success: true, gifs: cached, cached: true });
     }
 
     // We explicitly append "gif" to ensure we get animated images
     const searchQuery = q.toLowerCase().includes("gif") ? q : `${q} gif`;
-    const images = await google.image(searchQuery, { safe: false });
+    const images = await google.image(searchQuery, { safe: true });
 
     const gifs = images.map((item: any, i: number) => ({
       id: `google_gif_${item.id || Date.now() + i}`,
@@ -286,7 +346,7 @@ app.get("/api/search-google-gifs", async (req, res) => {
       is_video: true,
     }));
 
-    googleGifCache.set(q, { data: gifs, timestamp: Date.now() });
+    setBoundedCache(googleGifCache, q, gifs);
     res.json({ success: true, gifs });
   } catch (error: any) {
     console.error("Google GIF Search error:", error, "Query:", req.query.q);
@@ -298,22 +358,26 @@ const tenorGifCache = new Map<string, { data: any; timestamp: number }>();
 
 app.get("/api/search-gifs", async (req, res) => {
   try {
-    const q = req.query.q as string;
-    const pos = req.query.pos as string;
+    const q = normalizeQuery(req.query.q);
+    const pos = normalizeQuery(req.query.pos);
     const force = req.query.force === "true";
     if (!q) return res.json({ success: true, gifs: [], next: "" });
 
     const cacheKey = `${q}_${pos || ""}`;
-    if (!force && tenorGifCache.has(cacheKey) && Date.now() - tenorGifCache.get(cacheKey)!.timestamp < CACHE_DURATION_MS) {
-      const cached = tenorGifCache.get(cacheKey)!.data;
+    const cached = !force ? getCached(tenorGifCache, cacheKey) : null;
+    if (cached) {
       return res.json({ success: true, ...cached, cached: true });
     }
 
-    const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
     const endpoint = force ? "random" : "search";
-    const response = await fetch(
-      `https://g.tenor.com/v1/${endpoint}?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
-    );
+    const params = new URLSearchParams({
+      q,
+      key: getTenorApiKey(),
+      limit: "20",
+    });
+    if (pos) params.set("pos", pos);
+
+    const response = await fetch(`https://g.tenor.com/v1/${endpoint}?${params}`);
     if (!response.ok) {
       throw new Error("Failed to search Tenor");
     }
@@ -332,7 +396,7 @@ app.get("/api/search-gifs", async (req, res) => {
       is_video: true,
     }));
 
-    tenorGifCache.set(cacheKey, { data: { gifs, next: data.next }, timestamp: Date.now() });
+    setBoundedCache(tenorGifCache, cacheKey, { gifs, next: data.next });
     res.json({ success: true, gifs, next: data.next });
   } catch (error: any) {
     console.error("GIF Search error:", error, "Query:", req.query.q);
@@ -342,12 +406,12 @@ app.get("/api/search-gifs", async (req, res) => {
 
   app.post("/api/chat-to-meme", aiLimiter, express.json(), async (req, res) => {
     try {
-      const { text } = req.body;
+      const text = normalizeQuery(req.body?.text);
       if (!text) return res.status(400).json({ error: "Text is required" });
 
       const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
       const ai = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey: getGeminiApiKey(),
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
       const response = await ai.models.generateContent({
@@ -387,24 +451,19 @@ app.get("/api/search-gifs", async (req, res) => {
 
       res.json({ success: true, memeDraft: data });
     } catch (error: any) {
-      const errMsg = error.message || error.toString() || "Unknown error";
-      console.error("AI Chat-to-Meme error:", errMsg, "Body:", req.body);
-      let userMsg = errMsg;
-      if (typeof userMsg === 'string' && userMsg.includes("dunning decision")) {
-        userMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-      }
-      res.status(500).json({ success: false, error: userMsg });
+      console.error("AI Chat-to-Meme error:", error instanceof Error ? error.message : error);
+      res.status(500).json({ success: false, error: getAiErrorMessage(error) });
     }
   });
 
   app.post("/api/generate-meme", aiLimiter, express.json(), async (req, res) => {
     try {
-      const { text } = req.body;
+      const text = normalizeQuery(req.body?.text);
       if (!text) return res.status(400).json({ error: "Text is required" });
 
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey: getGeminiApiKey(),
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
       const response = await ai.models.generateContent({
@@ -439,13 +498,8 @@ app.get("/api/search-gifs", async (req, res) => {
           .json({ success: false, error: "Failed to generate image" });
       }
     } catch (error: any) {
-      const errMsg = error.message || error.toString() || "Unknown error";
-      console.error("AI Generation error:", errMsg, "Body:", req.body);
-      let userMsg = errMsg;
-      if (typeof userMsg === 'string' && userMsg.includes("dunning decision")) {
-        userMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-      }
-      res.status(500).json({ success: false, error: userMsg });
+      console.error("AI Generation error:", error instanceof Error ? error.message : error);
+      res.status(500).json({ success: false, error: getAiErrorMessage(error) });
     }
   });
 
