@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { Check, Sparkles, Gem, ImagePlus, AlertCircle } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { apiUrl } from "../lib/api";
 
 export default function Pro() {
   const { user } = useAuth();
@@ -17,7 +18,7 @@ export default function Pro() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch("/api/create-checkout-session", {
+      const res = await fetch(apiUrl("/api/create-checkout-session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });

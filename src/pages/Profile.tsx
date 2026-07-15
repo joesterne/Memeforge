@@ -6,6 +6,7 @@ import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
 import { History, BarChart, Image as ImageIcon, Sparkles, CheckCircle2, User } from "lucide-react";
 import { toast } from "sonner";
+import { apiUrl } from "../lib/api";
 
 export default function Profile() {
   const { user } = useAuth();
@@ -44,7 +45,7 @@ export default function Profile() {
   const handleUpgrade = async () => {
     setIsUpgrading(true);
     try {
-      const res = await fetch("/api/create-checkout-session", {
+      const res = await fetch(apiUrl("/api/create-checkout-session"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
