@@ -197,12 +197,13 @@ export default function Editor() {
         });
     }
 
-    // Replace URL to reflect current room to share
+    // Replace URL to reflect current room to share. Use React Router so
+    // Capacitor/iOS builds update the HashRouter URL instead of the path.
     if (!isRoom || id === "new") {
-      window.history.replaceState(null, "", `/editor/${roomId}`);
+      navigate(`/editor/${roomId}`, { replace: true });
       setIsRoom(true);
     }
-  }, [id, isRoom]);
+  }, [id, isRoom, navigate, roomId]);
 
   useEffect(() => {
     const s = io(socketUrl());
