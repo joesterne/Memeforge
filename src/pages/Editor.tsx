@@ -54,6 +54,7 @@ import { ExportModal } from "../components/editor/ExportModal";
 import { CloseModal } from "../components/editor/CloseModal";
 import { saveRecentCreation } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
+import { apiUrl, socketUrl } from "../lib/api";
 
 export default function Editor() {
   const { id } = useParams();
@@ -204,7 +205,7 @@ export default function Editor() {
   }, [id, isRoom]);
 
   useEffect(() => {
-    const s = io(window.location.origin);
+    const s = io(socketUrl());
     setSocket(s);
 
     if (roomId) {
@@ -523,7 +524,7 @@ export default function Editor() {
     try {
       // 1. Get meme layout and background idea via chat-to-meme
       toast.info("Thinking of a meme idea...");
-      const chatRes = await fetch("/api/chat-to-meme", {
+      const chatRes = await fetch(apiUrl("/api/chat-to-meme"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: prompt }),
@@ -549,7 +550,7 @@ export default function Editor() {
       
       // 2. Generate the background image
       toast.info(`Generating image: ${newMemeData.backgroundPrompt}`);
-      const bgRes = await fetch("/api/generate-meme", {
+      const bgRes = await fetch(apiUrl("/api/generate-meme"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: newMemeData.backgroundPrompt }),
@@ -607,7 +608,7 @@ export default function Editor() {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 20000);
-      const res = await fetch("/api/generate-meme", {
+      const res = await fetch(apiUrl("/api/generate-meme"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: prompt }),
