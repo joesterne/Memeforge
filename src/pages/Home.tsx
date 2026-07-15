@@ -289,7 +289,7 @@ export default function Home() {
       if (activeTab === "gif") {
         if (data.success && Array.isArray(data.gifs)) {
           if (data.gifs.length === 0) {
-            toast.info("No Google GIF results found for this search.");
+            toast.info("No web GIF results found for this search.");
           } else {
             setGifs((prev) => {
               const newGifs = data.gifs.filter(
@@ -297,7 +297,7 @@ export default function Home() {
               );
               return [...newGifs, ...prev]; // put new templates at front
             });
-            toast.success(`Found ${data.gifs.length} GIFs from Google.`);
+            toast.success(`Found ${data.gifs.length} GIFs from the web.`);
           }
         } else {
           throw new Error(data.error || "Web search returned error");

@@ -333,7 +333,7 @@ export default function Editor() {
           ref,
           {
             objects,
-            templateUrl: template?.url || uploadedImageUrl || null,
+            templateUrl: uploadedImageUrl || template?.url || null,
             authorId: snap.exists() ? snap.data().authorId : user.uid,
             createdAt: snap.exists()
               ? snap.data().createdAt
@@ -350,7 +350,7 @@ export default function Editor() {
     }, 2000); // 2 second delay of inactivity
     
     return () => clearTimeout(timer);
-  }, [objects, user, db, roomId, template?.url, uploadedImageUrl, hasUnsavedChanges]);
+  }, [objects, user, roomId, template?.url, uploadedImageUrl, hasUnsavedChanges]);
 
   const emitUpdate = useCallback(
     (newObjects: CanvasObject[], skipHistory = false, skipSocket = false) => {
@@ -388,14 +388,18 @@ export default function Editor() {
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
+        if (!file.type.startsWith("image/")) {
+          toast.error("Please upload an image file.");
+          return;
+        }
         try {
           const { default: imageCompression } =
             await import("browser-image-compression");
           const options = {
-            maxSizeMB: 1,
-            maxWidthOrHeight: 1200,
+            maxSizeMB: 0.08,
+            maxWidthOrHeight: 900,
             useWebWorker: true,
-            initialQuality: 0.8,
+            initialQuality: 0.72,
           };
           const compressedFile = await imageCompression(file, options);
           const reader = new FileReader();
@@ -416,6 +420,9 @@ export default function Editor() {
           reader.readAsDataURL(compressedFile);
         } catch (error) {
           console.error("Compression error:", error);
+          toast.error("Could not add that image.");
+        } finally {
+          e.target.value = "";
         }
       }
     },
@@ -477,23 +484,32 @@ export default function Editor() {
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!file.type.startsWith("image/")) {
+        toast.error("Please upload an image file.");
+        return;
+      }
       try {
         const { default: imageCompression } =
           await import("browser-image-compression");
         const options = {
-          maxSizeMB: 1,
-          maxWidthOrHeight: 1200,
+          maxSizeMB: 0.08,
+          maxWidthOrHeight: 900,
           useWebWorker: true,
-          initialQuality: 0.8,
+          initialQuality: 0.72,
         };
         const compressedFile = await imageCompression(file, options);
         const reader = new FileReader();
         reader.onload = () => {
           setUploadedImageUrl(reader.result as string);
+          markDirty();
+          toast.success("Background uploaded. Click Save Now to keep it.");
         };
         reader.readAsDataURL(compressedFile);
       } catch (error) {
         console.error("Compression error:", error);
+        toast.error("Could not upload that background image.");
+      } finally {
+        e.target.value = "";
       }
     }
   };
@@ -752,40 +768,36 @@ export default function Editor() {
     document.body.removeChild(link);
   };
 
-  const submitMemeToDatabase = async () => {
-    if (!user) return toast.error("Must be signed in to submit!");
-    if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
-    
-    // clear selection first
+  const getRenderedMemeDataUrl = async () => {
+    if (!stageRef.current) throw new Error("Canvas is not ready");
     setSelectedId(null);
-    setSaving(true);
     setIsExporting(true);
     await new Promise((r) => setTimeout(r, 100));
 
-    const finalFormat = exportFormat === "image/gif" ? "image/png" : exportFormat; // fallback since dataurls for GIF are hard
-
-    let uri = "";
-    if (exportFormat === "image/gif") {
-      uri = stageRef.current.toDataURL({
-        pixelRatio: exportScale / renderScale,
-        mimeType: "image/png",
-      });
-    } else {
-      uri = stageRef.current.toDataURL({
-        pixelRatio: exportScale / renderScale,
-        mimeType: finalFormat,
-        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
-      });
-    }
-    
+    const maxDimension = Math.max(logicalSize.width, logicalSize.height, 1);
+    const pixelRatio = Math.min(1, 900 / maxDimension);
+    const uri = stageRef.current.toDataURL({
+      pixelRatio: pixelRatio / renderScale,
+      mimeType: "image/jpeg",
+      quality: 0.72,
+    });
     setIsExporting(false);
+    return uri;
+  };
+
+  const submitMemeToDatabase = async () => {
+    if (!user) return toast.error("Must be signed in to submit!");
+    if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
+    setSaving(true);
 
     const docId = uuidv4();
     try {
+      const uri = await getRenderedMemeDataUrl();
       const ref = doc(db, "submissions", docId);
       await setDoc(ref, {
         userId: user.uid,
-        imageUrl: uri,
+        userName: user.displayName || "Anonymous",
+        memeUrl: uri,
         createdAt: new Date().toISOString(),
       });
       toast.success("Meme submitted to the database successfully!");
@@ -794,6 +806,7 @@ export default function Editor() {
       handleFirestoreError(e, OperationType.WRITE, `submissions/${docId}`);
     } finally {
       setSaving(false);
+      setIsExporting(false);
     }
   };
 
@@ -803,24 +816,37 @@ export default function Editor() {
     setSaving(true);
     const newTemplateId = uuidv4();
     try {
-      const ref = doc(db, "memes", newTemplateId);
-      await setDoc(
-        ref,
-        {
-          objects,
-          templateUrl: template?.url || uploadedImageUrl || null,
-          authorId: user.uid,
-          createdAt: new Date().toISOString(),
-          isTemplate: true,
-        }
-      );
+      const renderedUrl = await getRenderedMemeDataUrl();
+      const ref = doc(db, "templates", newTemplateId);
+      await setDoc(ref, {
+        userId: user.uid,
+        userName: user.displayName || "Anonymous",
+        name: template?.name ? `${template.name} remix` : "Saved meme template",
+        url: renderedUrl,
+        width: logicalSize.width,
+        height: logicalSize.height,
+        box_count: 2,
+        createdAt: new Date().toISOString(),
+      });
       setHasUnsavedChanges(false);
-      toast.success("Saved as new personal template!");
-      navigate(`/editor/${newTemplateId}`);
+      toast.success("Saved meme as a reusable template!");
+      navigate(`/editor/template_${newTemplateId}`, {
+        state: {
+          template: {
+            id: newTemplateId,
+            name: template?.name ? `${template.name} remix` : "Saved meme template",
+            url: renderedUrl,
+            width: logicalSize.width,
+            height: logicalSize.height,
+            box_count: 2,
+          },
+        },
+      });
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `memes/${newTemplateId}`);
+      handleFirestoreError(err, OperationType.WRITE, `templates/${newTemplateId}`);
     } finally {
       setSaving(false);
+      setIsExporting(false);
     }
   };
 
@@ -840,7 +866,7 @@ export default function Editor() {
         ref,
         {
           objects,
-          templateUrl: template?.url || uploadedImageUrl || null,
+          templateUrl: uploadedImageUrl || template?.url || null,
           authorId: snap.exists() ? snap.data().authorId : user.uid,
           createdAt: snap.exists()
             ? snap.data().createdAt

@@ -22,7 +22,7 @@ service cloud.firestore {
              data.createdAt.size() <= 50 &&
              data.objects is list &&
              data.objects.size() <= 100 &&
-             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
+             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 150000) || data.templateUrl == null : true);
     }
     
     function isValidMemeUpdate(data) {
@@ -34,7 +34,7 @@ service cloud.firestore {
              data.createdAt == existing().createdAt &&
              data.objects is list &&
              data.objects.size() <= 100 &&
-             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
+             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 150000) || data.templateUrl == null : true);
     }
 
     function isValidFavorite(data) {
@@ -60,7 +60,7 @@ service cloud.firestore {
              data.userName is string &&
              data.userName.size() <= 100 &&
              data.memeUrl is string &&
-             data.memeUrl.size() <= 20000 &&
+             data.memeUrl.size() <= 300000 &&
              data.createdAt is string &&
              data.createdAt.size() <= 50;
     }
@@ -73,7 +73,7 @@ service cloud.firestore {
              data.userName is string &&
              data.userName.size() <= 100 &&
              data.url is string &&
-             data.url.size() <= 100000 &&
+             data.url.size() <= 300000 &&
              data.name is string &&
              data.name.size() <= 100 &&
              data.width is number &&
@@ -91,7 +91,7 @@ service cloud.firestore {
              data.userName is string &&
              data.userName.size() <= 100 &&
              data.url is string &&
-             data.url.size() <= 100000 &&
+             data.url.size() <= 300000 &&
              data.name is string &&
              data.name.size() <= 100 &&
              data.width is number &&

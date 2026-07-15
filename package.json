@@ -23,7 +23,6 @@
     "express-rate-limit": "^8.5.2",
     "firebase": "^12.13.0",
     "google-trends-api": "^4.9.2",
-    "googlethis": "^1.8.0",
     "helmet": "^8.2.0",
     "html-to-image": "^1.11.13",
     "konva": "^10.3.0",
@@ -42,7 +41,7 @@
     "use-image": "^1.1.4",
     "usehooks-ts": "^3.1.1",
     "uuid": "^14.0.0",
-    "vite": "^6.2.3"
+    "vite": "^6.4.3"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
@@ -58,14 +57,14 @@
     "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.21",
     "domexception": "^4.0.0",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.25.12",
     "eslint": "^10.6.0",
     "jsdom": "^29.1.1",
     "puppeteer": "^25.3.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
+    "vite": "^6.4.3",
     "vite-plugin-pwa": "^1.3.0",
     "workbox-window": "^7.4.1"
   },

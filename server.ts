@@ -5,7 +5,6 @@ import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import googleTrends from "google-trends-api";
-import google from "googlethis";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
@@ -328,7 +327,8 @@ app.get("/api/search-google-gifs", async (req, res) => {
       return res.json({ success: true, gifs: cached, cached: true });
     }
 
-    // We explicitly append "gif" to ensure we get animated images
+    // Keep the existing endpoint contract, but use Tenor directly instead of
+    // the unmaintained googlethis package and its vulnerable axios dependency.
     const searchQuery = q.toLowerCase().includes("gif") ? q : `${q} gif`;
     const images = await google.image(searchQuery, { safe: true });
 
@@ -340,17 +340,15 @@ app.get("/api/search-google-gifs", async (req, res) => {
       width: item.width || 400,
       height: item.height || 400,
       box_count: 1,
-      dateAdded: new Date(
-        Date.now() - Math.random() * 100000000,
-      ).toISOString(),
+      dateAdded: new Date().toISOString(),
       is_video: true,
-    }));
+    })).filter((gif: any) => Boolean(gif.url));
 
     setBoundedCache(googleGifCache, q, gifs);
     res.json({ success: true, gifs });
   } catch (error: any) {
-    console.error("Google GIF Search error:", error, "Query:", req.query.q);
-    res.status(500).json({ success: false, error: "An unexpected error occurred while searching Google GIFs. Please try again later." });
+    console.error("GIF web search error:", error, "Query:", req.query.q);
+    res.status(500).json({ success: false, error: "An unexpected error occurred while searching GIFs. Please try again later." });
   }
 });
 
