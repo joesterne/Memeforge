@@ -25,6 +25,8 @@ VITE_API_BASE_URL=https://your-memeforge-api.example.com
 
 The iOS build uses this value for API calls and Socket.IO. When it is unset, the web build keeps using same-origin relative API paths.
 
+On the deployed backend, make sure CORS allows the native app origin. The server allows `capacitor://localhost` and `memeforge://localhost` by default; if you change the Capacitor scheme or host, set `NATIVE_APP_ORIGINS` on the backend to the comma-separated native origins you need.
+
 ## Build and sync iOS
 
 ```sh

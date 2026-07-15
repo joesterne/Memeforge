@@ -69,12 +69,52 @@ const FALLBACK_TRENDS = [
   "memes",
 ];
 
+function parseOrigins(value?: string): string[] {
+  return value?.split(",").map((origin) => origin.trim()).filter(Boolean) || [];
+}
+
+function getAllowedOrigins(): string[] {
+  const configuredOrigins = parseOrigins(process.env.ALLOWED_ORIGINS);
+  const nativeOrigins = parseOrigins(process.env.NATIVE_APP_ORIGINS);
+  const appOrigin = process.env.APP_URL ? [process.env.APP_URL] : [];
+  const localOrigins = process.env.NODE_ENV === "production"
+    ? []
+    : ["http://localhost:3000", "http://localhost:5173"];
+
+  return Array.from(new Set([
+    ...configuredOrigins,
+    ...nativeOrigins,
+    ...appOrigin,
+    ...localOrigins,
+    "capacitor://localhost",
+    "memeforge://localhost",
+  ]));
+}
+
 function getClientOrigin(): string | string[] | boolean {
-  return process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean)
-    : process.env.NODE_ENV === "production"
-      ? process.env.APP_URL || false
-      : ["http://localhost:3000", "http://localhost:5173"];
+  const origins = getAllowedOrigins();
+  return origins.length > 0 ? origins : false;
+}
+
+function applyCorsHeaders(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const allowedOrigins = getAllowedOrigins();
+  const requestOrigin = req.headers.origin;
+
+  if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+    if (requestOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+      res.setHeader("Vary", "Origin");
+    }
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  return next();
 }
 
 function normalizeQuery(input: unknown): string {
@@ -121,6 +161,7 @@ async function startServer() {
     crossOriginEmbedderPolicy: false,
   }));
   app.use(compression());
+  app.use("/api", applyCorsHeaders);
 
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
