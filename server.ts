@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import googleTrends from "google-trends-api";
+import google from "googlethis";
 import compression from "compression";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
@@ -23,133 +24,6 @@ function getStripe(): Stripe {
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-function getRequiredSecret(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} environment variable is required`);
-  }
-  return value;
-}
-
-function getGeminiApiKey(): string {
-  return getRequiredSecret("GEMINI_API_KEY");
-}
-
-function getTenorApiKey(): string {
-  return getRequiredSecret("TENOR_API_KEY");
-}
-
-function getAiErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("dunning decision")) {
-    return "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-  }
-  if (message.includes("GEMINI_API_KEY")) {
-    return "Gemini API is not configured. Please add GEMINI_API_KEY to the server environment.";
-  }
-  return "An unexpected error occurred while generating AI content. Please try again later.";
-}
-
-const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
-const MAX_CACHE_ENTRIES = 100;
-const MAX_QUERY_LENGTH = 80;
-const MAX_SOCKET_ROOMS = 500;
-const MAX_ROOM_OBJECTS = 250;
-const MAX_USER_NAME_LENGTH = 80;
-const FALLBACK_TRENDS = [
-  "drake",
-  "kendrick",
-  "nba",
-  "gta 6",
-  "ai",
-  "taylor swift",
-  "marvel",
-  "apple",
-  "doge",
-  "memes",
-];
-
-function parseOrigins(value?: string): string[] {
-  return value?.split(",").map((origin) => origin.trim()).filter(Boolean) || [];
-}
-
-function getAllowedOrigins(): string[] {
-  const configuredOrigins = parseOrigins(process.env.ALLOWED_ORIGINS);
-  const nativeOrigins = parseOrigins(process.env.NATIVE_APP_ORIGINS);
-  const appOrigin = process.env.APP_URL ? [process.env.APP_URL] : [];
-  const localOrigins = process.env.NODE_ENV === "production"
-    ? []
-    : ["http://localhost:3000", "http://localhost:5173"];
-
-  return Array.from(new Set([
-    ...configuredOrigins,
-    ...nativeOrigins,
-    ...appOrigin,
-    ...localOrigins,
-    "capacitor://localhost",
-    "memeforge://localhost",
-  ]));
-}
-
-function getClientOrigin(): string | string[] | boolean {
-  const origins = getAllowedOrigins();
-  return origins.length > 0 ? origins : false;
-}
-
-function applyCorsHeaders(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const allowedOrigins = getAllowedOrigins();
-  const requestOrigin = req.headers.origin;
-
-  if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
-    if (requestOrigin) {
-      res.setHeader("Access-Control-Allow-Origin", requestOrigin);
-      res.setHeader("Vary", "Origin");
-    }
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  }
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
-  return next();
-}
-
-function normalizeQuery(input: unknown): string {
-  const value = Array.isArray(input) ? input[0] : input;
-  if (typeof value !== "string") return "";
-  return value.trim().replace(/\s+/g, " ").slice(0, MAX_QUERY_LENGTH);
-}
-
-function setBoundedCache<T>(cache: Map<string, { data: T; timestamp: number }>, key: string, data: T) {
-  if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey) cache.delete(oldestKey);
-  }
-  cache.set(key, { data, timestamp: Date.now() });
-}
-
-function getCached<T>(cache: Map<string, { data: T; timestamp: number }>, key: string): T | null {
-  const cached = cache.get(key);
-  if (!cached || Date.now() - cached.timestamp >= CACHE_DURATION_MS) return null;
-  cache.delete(key);
-  cache.set(key, cached);
-  return cached.data;
-}
-
-function isSafeRoomId(roomId: unknown): roomId is string {
-  return typeof roomId === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(roomId);
-}
-
-function sanitizeSocketUser(user: any) {
-  return {
-    id: typeof user?.id === "string" ? user.id.slice(0, MAX_USER_NAME_LENGTH) : undefined,
-    name: typeof user?.name === "string" ? user.name.slice(0, MAX_USER_NAME_LENGTH) : "Guest",
-  };
-}
-
 async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
@@ -161,7 +35,6 @@ async function startServer() {
     crossOriginEmbedderPolicy: false,
   }));
   app.use(compression());
-  app.use("/api", applyCorsHeaders);
 
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -183,7 +56,7 @@ async function startServer() {
   app.use("/api/", apiLimiter);
 
   const io = new Server(httpServer, {
-    cors: { origin: getClientOrigin(), methods: ["GET", "POST"] },
+    cors: { origin: "*" },
   });
 
   // Socket.io for Real-Time Collaboration
@@ -192,23 +65,21 @@ async function startServer() {
 
   io.on("connection", (socket) => {
     socket.on("join-room", (roomId: string, user: any) => {
-      if (!isSafeRoomId(roomId) || Object.keys(rooms).length >= MAX_SOCKET_ROOMS) return;
       socket.join(roomId);
       if (!rooms[roomId]) {
         rooms[roomId] = { objects: [], users: {} };
       }
-      const safeUser = sanitizeSocketUser(user);
-      rooms[roomId].users[socket.id] = safeUser;
+      rooms[roomId].users[socket.id] = user;
 
       socket.emit("room-state", rooms[roomId]);
-      socket.to(roomId).emit("user-joined", { id: socket.id, user: safeUser });
+      socket.to(roomId).emit("user-joined", { id: socket.id, user });
     });
 
     socket.on("canvas-update", (roomId: string, data: any) => {
-      if (isSafeRoomId(roomId) && rooms[roomId] && Array.isArray(data)) {
-        // simplistic overwrite for now, capped to bound memory and broadcast size
-        rooms[roomId].objects = data.slice(0, MAX_ROOM_OBJECTS);
-        socket.to(roomId).emit("canvas-updated", rooms[roomId].objects);
+      if (rooms[roomId]) {
+        // simplistic overwrite for now
+        rooms[roomId].objects = data;
+        socket.to(roomId).emit("canvas-updated", data);
       }
     });
 
@@ -217,9 +88,6 @@ async function startServer() {
         if (rooms[roomId].users[socket.id]) {
           delete rooms[roomId].users[socket.id];
           io.to(roomId).emit("user-left", socket.id);
-          if (Object.keys(rooms[roomId].users).length === 0) {
-            delete rooms[roomId];
-          }
         }
       }
     });
@@ -233,7 +101,7 @@ async function startServer() {
   app.get("/api/test-gemini", async (req, res) => {
     try {
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
         contents: "Hello",
@@ -246,6 +114,7 @@ async function startServer() {
   });
 
 let cachedTrends: { data: string[]; timestamp: number } | null = null;
+const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
 
 app.get("/api/trending-searches", async (req, res) => {
   const force = req.query.force === "true";
@@ -268,7 +137,18 @@ app.get("/api/trending-searches", async (req, res) => {
       console.warn(
         "Google Trends returned invalid JSON (likely rate limited or blocked). Using fallback.",
       );
-      const terms = FALLBACK_TRENDS;
+      const terms = [
+        "drake",
+        "kendrick",
+        "nba",
+        "gta 6",
+        "ai",
+        "taylor swift",
+        "marvel",
+        "apple",
+        "doge",
+        "memes",
+      ];
       cachedTrends = { data: terms, timestamp: Date.now() };
       return res.json({ success: true, terms });
     }
@@ -283,14 +163,36 @@ app.get("/api/trending-searches", async (req, res) => {
     }
 
     if (terms.length === 0) {
-      terms = FALLBACK_TRENDS;
+      terms = [
+        "drake",
+        "kendrick",
+        "nba",
+        "gta 6",
+        "ai",
+        "taylor swift",
+        "marvel",
+        "apple",
+        "doge",
+        "memes",
+      ];
     }
 
     cachedTrends = { data: terms, timestamp: Date.now() };
     res.json({ success: true, terms });
   } catch (error: any) {
     console.warn("Google Trends Error:", error);
-    const fallbackTerms = FALLBACK_TRENDS;
+    const fallbackTerms = [
+      "drake",
+      "kendrick",
+      "nba",
+      "gta 6",
+      "ai",
+      "taylor swift",
+      "marvel",
+      "apple",
+      "doge",
+      "memes",
+    ];
     cachedTrends = { data: fallbackTerms, timestamp: Date.now() };
     res.json({
       success: true,
@@ -305,13 +207,12 @@ const memeSearchCache = new Map<string, { data: any[]; timestamp: number }>();
 
 app.get("/api/search-memes", async (req, res) => {
   try {
-    const q = normalizeQuery(req.query.q);
+    const q = req.query.q as string;
     const force = req.query.force === "true";
     if (!q) return res.json({ success: true, memes: [] });
 
-    const cached = !force ? getCached(memeSearchCache, q) : null;
-    if (cached) {
-      return res.json({ success: true, memes: cached, cached: true });
+    if (!force && memeSearchCache.has(q) && Date.now() - memeSearchCache.get(q)!.timestamp < CACHE_DURATION_MS) {
+      return res.json({ success: true, memes: memeSearchCache.get(q)!.data, cached: true });
     }
 
     const response = await fetch(
@@ -347,7 +248,7 @@ app.get("/api/search-memes", async (req, res) => {
       count++;
     }
 
-    setBoundedCache(memeSearchCache, q, memes);
+    memeSearchCache.set(q, { data: memes, timestamp: Date.now() });
     res.json({ success: true, memes });
   } catch (error: any) {
     console.error("Search error:", error, "Query:", req.query.q);
@@ -359,19 +260,17 @@ const googleGifCache = new Map<string, { data: any[]; timestamp: number }>();
 
 app.get("/api/search-google-gifs", async (req, res) => {
   try {
-    const q = normalizeQuery(req.query.q);
+    const q = req.query.q as string;
     const force = req.query.force === "true";
     if (!q) return res.json({ success: true, gifs: [] });
 
-    const cached = !force ? getCached(googleGifCache, q) : null;
-    if (cached) {
-      return res.json({ success: true, gifs: cached, cached: true });
+    if (!force && googleGifCache.has(q) && Date.now() - googleGifCache.get(q)!.timestamp < CACHE_DURATION_MS) {
+      return res.json({ success: true, gifs: googleGifCache.get(q)!.data, cached: true });
     }
 
-    // Keep the existing endpoint contract, but use Tenor directly instead of
-    // the unmaintained googlethis package and its vulnerable axios dependency.
+    // We explicitly append "gif" to ensure we get animated images
     const searchQuery = q.toLowerCase().includes("gif") ? q : `${q} gif`;
-    const images = await google.image(searchQuery, { safe: true });
+    const images = await google.image(searchQuery, { safe: false });
 
     const gifs = images.map((item: any, i: number) => ({
       id: `google_gif_${item.id || Date.now() + i}`,
@@ -381,15 +280,17 @@ app.get("/api/search-google-gifs", async (req, res) => {
       width: item.width || 400,
       height: item.height || 400,
       box_count: 1,
-      dateAdded: new Date().toISOString(),
+      dateAdded: new Date(
+        Date.now() - Math.random() * 100000000,
+      ).toISOString(),
       is_video: true,
-    })).filter((gif: any) => Boolean(gif.url));
+    }));
 
-    setBoundedCache(googleGifCache, q, gifs);
+    googleGifCache.set(q, { data: gifs, timestamp: Date.now() });
     res.json({ success: true, gifs });
   } catch (error: any) {
-    console.error("GIF web search error:", error, "Query:", req.query.q);
-    res.status(500).json({ success: false, error: "An unexpected error occurred while searching GIFs. Please try again later." });
+    console.error("Google GIF Search error:", error, "Query:", req.query.q);
+    res.status(500).json({ success: false, error: "An unexpected error occurred while searching Google GIFs. Please try again later." });
   }
 });
 
@@ -397,26 +298,22 @@ const tenorGifCache = new Map<string, { data: any; timestamp: number }>();
 
 app.get("/api/search-gifs", async (req, res) => {
   try {
-    const q = normalizeQuery(req.query.q);
-    const pos = normalizeQuery(req.query.pos);
+    const q = req.query.q as string;
+    const pos = req.query.pos as string;
     const force = req.query.force === "true";
     if (!q) return res.json({ success: true, gifs: [], next: "" });
 
     const cacheKey = `${q}_${pos || ""}`;
-    const cached = !force ? getCached(tenorGifCache, cacheKey) : null;
-    if (cached) {
+    if (!force && tenorGifCache.has(cacheKey) && Date.now() - tenorGifCache.get(cacheKey)!.timestamp < CACHE_DURATION_MS) {
+      const cached = tenorGifCache.get(cacheKey)!.data;
       return res.json({ success: true, ...cached, cached: true });
     }
 
+    const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
     const endpoint = force ? "random" : "search";
-    const params = new URLSearchParams({
-      q,
-      key: getTenorApiKey(),
-      limit: "20",
-    });
-    if (pos) params.set("pos", pos);
-
-    const response = await fetch(`https://g.tenor.com/v1/${endpoint}?${params}`);
+    const response = await fetch(
+      `https://g.tenor.com/v1/${endpoint}?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
+    );
     if (!response.ok) {
       throw new Error("Failed to search Tenor");
     }
@@ -435,7 +332,7 @@ app.get("/api/search-gifs", async (req, res) => {
       is_video: true,
     }));
 
-    setBoundedCache(tenorGifCache, cacheKey, { gifs, next: data.next });
+    tenorGifCache.set(cacheKey, { data: { gifs, next: data.next }, timestamp: Date.now() });
     res.json({ success: true, gifs, next: data.next });
   } catch (error: any) {
     console.error("GIF Search error:", error, "Query:", req.query.q);
@@ -445,12 +342,12 @@ app.get("/api/search-gifs", async (req, res) => {
 
   app.post("/api/chat-to-meme", aiLimiter, express.json(), async (req, res) => {
     try {
-      const text = normalizeQuery(req.body?.text);
+      const { text } = req.body;
       if (!text) return res.status(400).json({ error: "Text is required" });
 
       const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
       const ai = new GoogleGenAI({
-        apiKey: getGeminiApiKey(),
+        apiKey: process.env.GEMINI_API_KEY,
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
       const response = await ai.models.generateContent({
@@ -490,19 +387,24 @@ app.get("/api/search-gifs", async (req, res) => {
 
       res.json({ success: true, memeDraft: data });
     } catch (error: any) {
-      console.error("AI Chat-to-Meme error:", error instanceof Error ? error.message : error);
-      res.status(500).json({ success: false, error: getAiErrorMessage(error) });
+      const errMsg = error.message || error.toString() || "Unknown error";
+      console.error("AI Chat-to-Meme error:", errMsg, "Body:", req.body);
+      let userMsg = errMsg;
+      if (typeof userMsg === 'string' && userMsg.includes("dunning decision")) {
+        userMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+      }
+      res.status(500).json({ success: false, error: userMsg });
     }
   });
 
   app.post("/api/generate-meme", aiLimiter, express.json(), async (req, res) => {
     try {
-      const text = normalizeQuery(req.body?.text);
+      const { text } = req.body;
       if (!text) return res.status(400).json({ error: "Text is required" });
 
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ 
-        apiKey: getGeminiApiKey(),
+        apiKey: process.env.GEMINI_API_KEY,
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
       const response = await ai.models.generateContent({
@@ -537,8 +439,13 @@ app.get("/api/search-gifs", async (req, res) => {
           .json({ success: false, error: "Failed to generate image" });
       }
     } catch (error: any) {
-      console.error("AI Generation error:", error instanceof Error ? error.message : error);
-      res.status(500).json({ success: false, error: getAiErrorMessage(error) });
+      const errMsg = error.message || error.toString() || "Unknown error";
+      console.error("AI Generation error:", errMsg, "Body:", req.body);
+      let userMsg = errMsg;
+      if (typeof userMsg === 'string' && userMsg.includes("dunning decision")) {
+        userMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
+      }
+      res.status(500).json({ success: false, error: userMsg });
     }
   });
 

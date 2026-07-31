@@ -4,7 +4,7 @@
  */
 
 import { lazy, Suspense } from "react";
-import { BrowserRouter, HashRouter, Route, Routes } from "react-router";
+import { BrowserRouter, Route, Routes } from "react-router";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { VotesProvider } from "./contexts/VotesContext";
@@ -28,14 +28,12 @@ const LoadingSkeleton = () => (
   </div>
 );
 
-const Router = import.meta.env.VITE_IOS_APP === "true" ? HashRouter : BrowserRouter;
-
 export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
         <VotesProvider>
-          <Router>
+          <BrowserRouter>
             <div className="h-screen bg-slate-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 font-sans flex flex-col overflow-hidden transition-colors duration-300">
               <Navbar />
               <main id="main-scroll-container" className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 overflow-y-auto">
@@ -49,7 +47,7 @@ export default function App() {
               </main>
             </div>
             <Toaster richColors position="top-right" />
-          </Router>
+          </BrowserRouter>
         </VotesProvider>
       </AuthProvider>
     </ThemeProvider>
