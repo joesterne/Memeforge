@@ -88,6 +88,10 @@ async function startServer() {
         if (rooms[roomId].users[socket.id]) {
           delete rooms[roomId].users[socket.id];
           io.to(roomId).emit("user-left", socket.id);
+          
+          if (Object.keys(rooms[roomId].users).length === 0) {
+            delete rooms[roomId];
+          }
         }
       }
     });
@@ -257,6 +261,22 @@ app.get("/api/search-memes", async (req, res) => {
 });
 
 const googleGifCache = new Map<string, { data: any[]; timestamp: number }>();
+const tenorGifCache = new Map<string, { data: any; timestamp: number }>();
+
+// Clean up stale cache entries to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of googleGifCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION_MS) {
+      googleGifCache.delete(key);
+    }
+  }
+  for (const [key, value] of tenorGifCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION_MS) {
+      tenorGifCache.delete(key);
+    }
+  }
+}, Math.max(60000, CACHE_DURATION_MS));
 
 app.get("/api/search-google-gifs", async (req, res) => {
   try {
@@ -293,8 +313,6 @@ app.get("/api/search-google-gifs", async (req, res) => {
     res.status(500).json({ success: false, error: "An unexpected error occurred while searching Google GIFs. Please try again later." });
   }
 });
-
-const tenorGifCache = new Map<string, { data: any; timestamp: number }>();
 
 app.get("/api/search-gifs", async (req, res) => {
   try {
@@ -351,7 +369,7 @@ app.get("/api/search-gifs", async (req, res) => {
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
       const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: `You are an expert meme creator. The user wants a meme about: ${text}. 
         Provide a concise visual description for an image generator (no text in the image) and the text overlay boxes for the meme canvas. Always provide reasonable x, y positions (assume canvas is 600x600 but keep text within 50-550 bounds, e.g. top and bottom text).
         Make it very funny.`,

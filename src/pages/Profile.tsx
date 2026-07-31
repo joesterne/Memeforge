@@ -16,6 +16,17 @@ export default function Profile() {
   const [isUpgrading, setIsUpgrading] = useState(false);
 
   useEffect(() => {
+    if (paymentStatus === "success") {
+      toast.success("Payment successful! You are now a Pro user.");
+      // optionally clean up the URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (paymentStatus === "cancelled") {
+      toast.error("Payment was cancelled.");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [paymentStatus]);
+
+  useEffect(() => {
     if (!user) return;
     if (!db || db.app.options.projectId === "MOCK") {
       setLoading(false);
