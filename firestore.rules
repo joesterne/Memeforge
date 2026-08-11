@@ -15,26 +15,28 @@ service cloud.firestore {
     // 2. Entity Validations
     function isValidMeme(data) {
       return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
-             data.keys().size() <= 4 &&
+             data.keys().size() <= 5 &&
              data.authorId is string &&
              data.authorId == request.auth.uid &&
              data.createdAt is string &&
              data.createdAt.size() <= 50 &&
              data.objects is list &&
              data.objects.size() <= 100 &&
-             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
+             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true) &&
+             (data.keys().hasAny(['isTemplate']) ? data.isTemplate is bool : true);
     }
     
     function isValidMemeUpdate(data) {
       return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
-             data.keys().size() <= 4 &&
+             data.keys().size() <= 5 &&
              data.authorId is string &&
              data.authorId == existing().authorId &&
              data.createdAt is string &&
              data.createdAt == existing().createdAt &&
              data.objects is list &&
              data.objects.size() <= 100 &&
-             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true);
+             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 2000) || data.templateUrl == null : true) &&
+             (data.keys().hasAny(['isTemplate']) ? data.isTemplate is bool : true);
     }
 
     function isValidFavorite(data) {
@@ -120,7 +122,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(memeId) && isValidMeme(incoming());
       
       allow update: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid && isValidMemeUpdate(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['objects', 'templateUrl'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['objects', 'templateUrl', 'isTemplate'])
       );
       
       allow delete: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid;

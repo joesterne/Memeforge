@@ -102,20 +102,7 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/test-gemini", async (req, res) => {
-    try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: "Hello",
-      });
-      res.json({ success: true, text: response.text });
-    } catch (e: any) {
-      console.error("Test Gemini Error:", e);
-      res.status(500).json({ error: "An unexpected error occurred while testing the API. Please try again later." });
-    }
-  });
+  // Removed test-gemini route
 
 let cachedTrends: { data: string[]; timestamp: number } | null = null;
 const CACHE_DURATION_MS = 1000 * 60 * 60; // 1 hour
@@ -358,10 +345,11 @@ app.get("/api/search-gifs", async (req, res) => {
   }
 });
 
-  app.post("/api/chat-to-meme", aiLimiter, express.json(), async (req, res) => {
+  app.post("/api/chat-to-meme", aiLimiter, express.json({ limit: '100kb' }), async (req, res) => {
     try {
       const { text } = req.body;
-      if (!text) return res.status(400).json({ error: "Text is required" });
+      if (!text || typeof text !== "string") return res.status(400).json({ error: "Text is required" });
+      if (text.length > 500) return res.status(400).json({ error: "Text is too long" });
 
       const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
       const ai = new GoogleGenAI({
@@ -415,10 +403,11 @@ app.get("/api/search-gifs", async (req, res) => {
     }
   });
 
-  app.post("/api/generate-meme", aiLimiter, express.json(), async (req, res) => {
+  app.post("/api/generate-meme", aiLimiter, express.json({ limit: '100kb' }), async (req, res) => {
     try {
       const { text } = req.body;
-      if (!text) return res.status(400).json({ error: "Text is required" });
+      if (!text || typeof text !== "string") return res.status(400).json({ error: "Text is required" });
+      if (text.length > 500) return res.status(400).json({ error: "Text is too long" });
 
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ 
@@ -467,7 +456,7 @@ app.get("/api/search-gifs", async (req, res) => {
     }
   });
 
-  app.post("/api/create-checkout-session", express.json(), async (req, res) => {
+  app.post("/api/create-checkout-session", apiLimiter, express.json({ limit: '10kb' }), async (req, res) => {
     try {
       const stripe = getStripe();
       const session = await stripe.checkout.sessions.create({
