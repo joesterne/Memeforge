@@ -2,11 +2,9 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { VitePWA } from 'vite-plugin-pwa';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 
-export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
-  return {
+export default defineConfig({
     plugins: [
       react(), 
       tailwindcss(),
@@ -14,6 +12,19 @@ export default defineConfig(({mode}) => {
         registerType: 'autoUpdate',
         injectRegister: 'auto',
         includeAssets: ['mask-icon.svg', 'apple-touch-icon.png'],
+        workbox: {
+          globPatterns: ['**/*.{html,css,svg,png,webmanifest}'],
+          runtimeCaching: [
+            {
+              urlPattern: ({ request }) => request.destination === 'script' || request.destination === 'worker',
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'memeforge-code-v1',
+                expiration: { maxEntries: 30, maxAgeSeconds: 7 * 24 * 60 * 60 }
+              }
+            }
+          ]
+        },
         manifest: {
           name: 'Meme Maker App',
           short_name: 'Meme Maker',
@@ -45,7 +56,22 @@ export default defineConfig(({mode}) => {
     build: {
       target: 'esnext',
       minify: 'esbuild',
-      cssMinify: true
+      cssMinify: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('/@firebase/firestore/') || id.includes('/firebase/firestore')) return 'vendor-firestore';
+            if (id.includes('/@firebase/auth/') || id.includes('/firebase/auth')) return 'vendor-firebase-auth';
+            if (id.includes('/@firebase/storage/') || id.includes('/firebase/storage')) return 'vendor-firebase-storage';
+            if (id.includes('/@firebase/') || id.includes('/firebase/')) return 'vendor-firebase-core';
+            if (/node_modules\/(react|react-dom|react-router|scheduler)\//.test(id)) return 'vendor-react';
+            if (id.includes('/lucide-react/')) return 'vendor-icons';
+            if (/node_modules\/(konva|react-konva|use-image)\//.test(id)) return 'vendor-canvas';
+            return undefined;
+          }
+        }
+      }
     },
     resolve: {
       alias: {
@@ -59,5 +85,4 @@ export default defineConfig(({mode}) => {
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
-  };
 });

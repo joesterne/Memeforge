@@ -1,18 +1,18 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { db } from "../lib/firebase";
-import { collection, onSnapshot, doc, setDoc, updateDoc, arrayUnion, arrayRemove, getDoc } from "firebase/firestore";
-import { useAuth } from "./AuthContext";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
+import { apiFetch } from "../lib/api";
+import { useAuth } from "./AuthContext";
 
-interface TemplateVotes {
-  upvoters: string[];
-  downvoters: string[];
+export interface TemplateVotes {
+  upvotes: number;
+  downvotes: number;
+  userVote: "up" | "down" | null;
 }
 
 interface VotesContextType {
   votes: Record<string, TemplateVotes>;
-  handleVote: (templateId: string, type: 'up' | 'down' | 'clear') => Promise<void>;
+  loadVotes: (templateIds: string[]) => void;
+  handleVote: (templateId: string, type: "up" | "down" | "clear") => Promise<void>;
   loading: boolean;
 }
 
@@ -20,82 +20,91 @@ const VotesContext = createContext<VotesContextType | null>(null);
 
 export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
   const [votes, setVotes] = useState<Record<string, TemplateVotes>>({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const { user } = useAuth();
+  const pending = useRef(new Set<string>());
+  const loaded = useRef(new Set<string>());
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!db || db.app.options.projectId === "MOCK") {
+    loaded.current.clear();
+    pending.current.clear();
+    setVotes({});
+  }, [user?.uid]);
+
+  const flush = useCallback(async () => {
+    const ids = [...pending.current].slice(0, 50);
+    ids.forEach((id) => pending.current.delete(id));
+    if (!ids.length) return;
+    setLoading(true);
+    try {
+      const data = await apiFetch<{ votes: Record<string, TemplateVotes> }>(
+        `/api/template-votes?ids=${encodeURIComponent(ids.join(","))}`,
+        {},
+        { user },
+      );
+      ids.forEach((id) => loaded.current.add(id));
+      setVotes((previous) => ({ ...previous, ...data.votes }));
+    } catch (error) {
+      console.error("Vote totals could not be loaded", error);
+    } finally {
       setLoading(false);
-      return;
-    }
-
-    const unsubscribe = onSnapshot(
-      collection(db, "templateVotes"),
-      (snapshot) => {
-        const newVotes: Record<string, TemplateVotes> = {};
-        snapshot.docs.forEach((doc) => {
-          newVotes[doc.id] = doc.data() as TemplateVotes;
-        });
-        setVotes(newVotes);
-        setLoading(false);
-      },
-      (error) => {
-        setLoading(false);
-        handleFirestoreError(error, OperationType.GET, "templateVotes");
+      if (pending.current.size) {
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          void flush();
+        }, 50);
       }
-    );
+    }
+  }, [user]);
 
-    return () => unsubscribe();
+  const loadVotes = useCallback((templateIds: string[]) => {
+    templateIds.forEach((id) => {
+      if (id && !loaded.current.has(id)) pending.current.add(id);
+    });
+    if (pending.current.size && !timer.current) {
+      timer.current = setTimeout(() => {
+        timer.current = null;
+        void flush();
+      }, 50);
+    }
+  }, [flush]);
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
   }, []);
 
-  const handleVote = async (templateId: string, type: 'up' | 'down' | 'clear') => {
+  const handleVote = useCallback(async (templateId: string, type: "up" | "down" | "clear") => {
     if (!user) {
-      toast.error("You must be logged in to vote.");
+      toast.error("Sign in to vote.");
       return;
     }
-    
-    if (!db || db.app.options.projectId === "MOCK") return;
-
+    const previous = votes[templateId] || { upvotes: 0, downvotes: 0, userVote: null };
+    let upvotes = previous.upvotes;
+    let downvotes = previous.downvotes;
+    if (previous.userVote === "up") upvotes = Math.max(0, upvotes - 1);
+    if (previous.userVote === "down") downvotes = Math.max(0, downvotes - 1);
+    if (type === "up") upvotes += 1;
+    if (type === "down") downvotes += 1;
+    setVotes((current) => ({
+      ...current,
+      [templateId]: { upvotes, downvotes, userVote: type === "clear" ? null : type },
+    }));
     try {
-      const voteRef = doc(db, "templateVotes", templateId);
-      const voteDoc = await getDoc(voteRef);
-
-      const isUpvoting = type === 'up';
-      const isDownvoting = type === 'down';
-
-      if (!voteDoc.exists()) {
-        // Create document if it doesn't exist
-        await setDoc(voteRef, {
-          upvoters: isUpvoting ? [user.uid] : [],
-          downvoters: isDownvoting ? [user.uid] : []
-        });
-      } else {
-        const updates: any = {};
-        
-        // Remove from both lists first to ensure clean state
-        updates.upvoters = arrayRemove(user.uid);
-        updates.downvoters = arrayRemove(user.uid);
-
-        await updateDoc(voteRef, updates);
-
-        // Then add to the target list if we aren't just clearing
-        if (type !== 'clear') {
-           const reUpdate: any = {};
-           if (isUpvoting) {
-             reUpdate.upvoters = arrayUnion(user.uid);
-           } else if (isDownvoting) {
-             reUpdate.downvoters = arrayUnion(user.uid);
-           }
-           await updateDoc(voteRef, reUpdate);
-        }
-      }
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `templateVotes/${templateId}`);
+      const data = await apiFetch<{ vote: TemplateVotes }>(
+        `/api/template-votes/${encodeURIComponent(templateId)}`,
+        { method: "POST", body: JSON.stringify({ type }) },
+        { user },
+      );
+      setVotes((previous) => ({ ...previous, [templateId]: data.vote }));
+    } catch (error) {
+      setVotes((current) => ({ ...current, [templateId]: previous }));
+      toast.error(error instanceof Error ? error.message : "Could not save your vote.");
     }
-  };
+  }, [user, votes]);
 
   return (
-    <VotesContext.Provider value={{ votes, handleVote, loading }}>
+    <VotesContext.Provider value={{ votes, loadVotes, handleVote, loading }}>
       {children}
     </VotesContext.Provider>
   );
@@ -103,8 +112,6 @@ export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
 
 export const useVotes = () => {
   const context = useContext(VotesContext);
-  if (!context) {
-    throw new Error("useVotes must be used within a VotesProvider");
-  }
+  if (!context) throw new Error("useVotes must be used within a VotesProvider");
   return context;
 };

@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, OAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "MOCK",
@@ -14,6 +15,7 @@ const firebaseConfig = {
 let app;
 let db: any = null;
 let auth: any = null;
+let storage: any = null;
 export const googleProvider = new GoogleAuthProvider();
 export const appleProvider = new OAuthProvider('apple.com');
 appleProvider.addScope('email');
@@ -21,10 +23,13 @@ appleProvider.addScope('name');
 
 try {
   app = initializeApp(firebaseConfig);
-  db = getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID || "ai-studio-memeforge-e89538b2-29ed-46d4-bae0-da32b129d8ed");
+  db = import.meta.env.VITE_FIREBASE_DATABASE_ID
+    ? getFirestore(app, import.meta.env.VITE_FIREBASE_DATABASE_ID)
+    : getFirestore(app);
   auth = getAuth(app);
+  storage = getStorage(app);
 } catch (e) {
   console.error("Firebase init failed:", e);
 }
 
-export { db, auth };
+export { db, auth, storage };

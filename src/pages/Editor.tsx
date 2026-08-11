@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, memo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
 import {
   Stage,
@@ -10,7 +10,6 @@ import {
   Line,
 } from "react-konva";
 import useImage from "use-image";
-import { v4 as uuidv4 } from "uuid";
 import {
   Type,
   Download,
@@ -28,15 +27,12 @@ import {
   ArrowDown,
   ImageIcon,
   Camera,
-  Sparkles,
   X,
   Grid3X3,
   ZoomIn,
   ZoomOut,
-  Maximize,
   CloudUpload
 } from "lucide-react";
-import { io, Socket } from "socket.io-client";
 import Draggable from "react-draggable";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../lib/firebase";
@@ -46,15 +42,26 @@ import {
   OperationType,
 } from "../lib/firebaseErrorHandler";
 import { toast } from "sonner";
-import Konva from "konva";
-
 import type { CanvasObject } from "../types/canvas";
 import { CanvasImage, CanvasText, AIPromptInput, AIMemeChatInput } from "../components/editor/CanvasElements";
 import { ExportModal } from "../components/editor/ExportModal";
 import { CloseModal } from "../components/editor/CloseModal";
 import { saveRecentCreation } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
-import { apiUrl, socketUrl } from "../lib/api";
+import { apiFetch, collaborationUrl } from "../lib/api";
+import { CollaborationClient, type CollaborationStatus } from "../lib/collaborationClient";
+import { dataUrlToBlob, storeUserMedia, validateImageFile } from "../lib/mediaStorage";
+import { encodeGifInWorker } from "../lib/gifExport";
+import { buildMemeDocument, resolveBackground } from "../lib/memeDocuments";
+import type { SubmissionDocument, TemplateDocument } from "../types/documents";
+import type {
+  CanvasUpdateAck,
+  CanvasUpdatePayload,
+  CollaborationRoomState,
+  CollaborationUser,
+} from "../types/collaboration";
+
+const MAX_HISTORY_STEPS = 30;
 
 export default function Editor() {
   const { id } = useParams();
@@ -63,16 +70,20 @@ export default function Editor() {
   const { user } = useAuth();
   const template = location.state?.template;
   
-  const { votes, handleVote } = useVotes();
+  const { votes, loadVotes, handleVote } = useVotes();
   const templateId = template?.id || id?.replace("template_", "");
   const templateVotes = templateId ? votes[templateId] : undefined;
-  const upvotes = templateVotes?.upvoters?.length || 0;
-  const downvotes = templateVotes?.downvoters?.length || 0;
+  const upvotes = templateVotes?.upvotes || 0;
+  const downvotes = templateVotes?.downvotes || 0;
   const score = upvotes - downvotes;
-  const hasUpvoted = user && templateVotes?.upvoters?.includes(user.uid);
-  const hasDownvoted = user && templateVotes?.downvoters?.includes(user.uid);
+  const hasUpvoted = user && templateVotes?.userVote === "up";
+  const hasDownvoted = user && templateVotes?.userVote === "down";
 
-  const [socket, setSocket] = useState<Socket | null>(null);
+  useEffect(() => {
+    if (templateId) loadVotes([templateId]);
+  }, [loadVotes, templateId]);
+
+  const [socket, setSocket] = useState<CollaborationClient | null>(null);
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const objectsRef = useRef<CanvasObject[]>([]);
   const [history, setHistory] = useState<CanvasObject[][]>([[]]);
@@ -84,27 +95,40 @@ export default function Editor() {
     objectsRef.current = objects;
   }, [objects]);
 
-  const [activeUsers, setActiveUsers] = useState<any[]>([]);
-  const [roomId] = useState(() => (id && id !== "new" && !id.startsWith("template_")) ? id : uuidv4());
+  const [activeUsers, setActiveUsers] = useState<CollaborationUser[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "reconnecting" | "failed">("connecting");
+  const revisionRef = useRef(0);
+  const socketUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSocketObjectsRef = useRef<CanvasObject[] | null>(null);
+  const socketUpdateInFlightRef = useRef(false);
+  const [roomId] = useState(() => (id && id !== "new" && !id.startsWith("template_")) ? id : crypto.randomUUID());
   const [bgImage] = useImage(template?.url || "", "anonymous");
   const [isRoom, setIsRoom] = useState(!id?.startsWith("template_"));
   const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "failed" | "offline">("idle");
   const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const exportAbortRef = useRef<AbortController | null>(null);
+
   const [isGridEnabled, setIsGridEnabled] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number | "fit">("fit");
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
-  const lastCenterRef = useRef<{ x: number; y: number } | null>(null);
   const lastDistRef = useRef<number>(0);
   const [isBackgroundAnimatedGif, setIsBackgroundAnimatedGif] = useState(
     template?.is_video || false,
   );
   const [exportFormat, setExportFormat] = useState<
     "image/png" | "image/jpeg" | "image/gif"
-  >(template?.is_video ? "image/gif" : "image/png");
-  const [exportScale, setExportScale] = useState<number>(1);
-  const [exportQuality, setExportQuality] = useState<number>(0.9);
+  >(() => {
+    if (template?.is_video) return "image/gif";
+    const saved = localStorage.getItem("memeforge_export_format");
+    return saved === "image/jpeg" || saved === "image/gif" ? saved : "image/png";
+  });
+  const [exportScale, setExportScale] = useState<number>(() => Number(localStorage.getItem("memeforge_export_scale")) || 1);
+  const [exportQuality, setExportQuality] = useState<number>(() => Number(localStorage.getItem("memeforge_export_quality")) || 0.9);
   const [showExportModal, setShowExportModal] = useState(false);
   const [generatingAI, setGeneratingAI] = useState(false);
+  const aiAbortRef = useRef<AbortController | null>(null);
   const [watermark, setWatermark] = useState({
     enabled: false,
     text: "Watermark",
@@ -116,14 +140,72 @@ export default function Editor() {
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const markDirty = useCallback(() => setHasUnsavedChanges(true), []);
 
+  useEffect(() => () => {
+    exportAbortRef.current?.abort();
+    aiAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("memeforge_export_format", exportFormat);
+    localStorage.setItem("memeforge_export_scale", String(exportScale));
+    localStorage.setItem("memeforge_export_quality", String(exportQuality));
+  }, [exportFormat, exportQuality, exportScale]);
+
+  const sendSocketUpdate = useCallback((nextObjects: CanvasObject[], immediate = false) => {
+    pendingSocketObjectsRef.current = nextObjects;
+    if (!socket?.connected) {
+      setConnectionStatus(socket ? "reconnecting" : "failed");
+      return;
+    }
+
+    const flush = () => {
+      if (socketUpdateInFlightRef.current || !pendingSocketObjectsRef.current || !socket.connected) return;
+      const queuedObjects = pendingSocketObjectsRef.current;
+      pendingSocketObjectsRef.current = null;
+      socketUpdateInFlightRef.current = true;
+      const payload: CanvasUpdatePayload = {
+        roomId,
+        objects: queuedObjects,
+        baseRevision: revisionRef.current,
+        requestId: crypto.randomUUID(),
+      };
+      socket.sendCanvasUpdate(payload, 5_000).then((acknowledgement: CanvasUpdateAck) => {
+        socketUpdateInFlightRef.current = false;
+        if (acknowledgement.accepted) {
+          revisionRef.current = acknowledgement.revision;
+          setConnectionStatus("connected");
+        } else if (acknowledgement.state) {
+          revisionRef.current = acknowledgement.state.revision;
+          setObjects(acknowledgement.state.objects);
+          setActiveUsers(acknowledgement.state.users);
+          setHistory([structuredClone(acknowledgement.state.objects)]);
+          setHistoryStep(0);
+          historyStepRef.current = 0;
+          toast.info("A collaborator changed the canvas first. The latest room version was restored.");
+        }
+        if (pendingSocketObjectsRef.current) queueMicrotask(flush);
+      }).catch(() => {
+        socketUpdateInFlightRef.current = false;
+        setConnectionStatus("reconnecting");
+      });
+    };
+
+    if (socketUpdateTimerRef.current) clearTimeout(socketUpdateTimerRef.current);
+    if (immediate) flush();
+    else socketUpdateTimerRef.current = setTimeout(flush, 150);
+  }, [roomId, socket]);
+
+  useEffect(() => () => {
+    if (socketUpdateTimerRef.current) clearTimeout(socketUpdateTimerRef.current);
+  }, []);
+
   const pushToHistory = useCallback((newObjects: CanvasObject[]) => {
     setHistory((prev) => {
       const upToCurrent = prev.slice(0, historyStepRef.current + 1);
-      return [...upToCurrent, newObjects];
-    });
-    setHistoryStep((prev) => {
-      const next = prev + 1;
-      historyStepRef.current = next;
+      const next = [...upToCurrent, structuredClone(newObjects)].slice(-MAX_HISTORY_STEPS);
+      const nextStep = next.length - 1;
+      historyStepRef.current = nextStep;
+      setHistoryStep(nextStep);
       return next;
     });
   }, []);
@@ -135,10 +217,10 @@ export default function Editor() {
       setObjects(previousState);
       setHistoryStep(prevStep);
       historyStepRef.current = prevStep;
-      if (socket) socket.emit("canvas-update", roomId, previousState);
+      sendSocketUpdate(previousState, true);
       markDirty();
     }
-  }, [history, socket, roomId, markDirty]);
+  }, [history, markDirty, sendSocketUpdate]);
 
   const handleRedo = useCallback(() => {
     if (historyStepRef.current < history.length - 1) {
@@ -147,10 +229,10 @@ export default function Editor() {
       setObjects(nextState);
       setHistoryStep(nextStep);
       historyStepRef.current = nextStep;
-      if (socket) socket.emit("canvas-update", roomId, nextState);
+      sendSocketUpdate(nextState, true);
       markDirty();
     }
-  }, [history, socket, roomId, markDirty]);
+  }, [history, markDirty, sendSocketUpdate]);
 
   const stageRef = useRef<any>(null);
   const trRef = useRef<any>(null);
@@ -161,6 +243,7 @@ export default function Editor() {
   });
   const [logicalSize, setLogicalSize] = useState({ width: 800, height: 800 });
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
+  const [uploadedImagePath, setUploadedImagePath] = useState<string | null>(null);
   const [upImage] = useImage(uploadedImageUrl || "", "anonymous");
 
   useEffect(() => {
@@ -190,6 +273,7 @@ export default function Editor() {
               historyStepRef.current = 0;
             }
             if (data.templateUrl) setUploadedImageUrl(data.templateUrl);
+            if (data.templatePath) setUploadedImagePath(data.templatePath);
           }
         })
         .catch((err) => {
@@ -206,36 +290,43 @@ export default function Editor() {
   }, [id, isRoom, navigate, roomId]);
 
   useEffect(() => {
-    const s = io(socketUrl());
+    const s = new CollaborationClient(collaborationUrl(), 8);
     setSocket(s);
+    setConnectionStatus("connecting");
 
-    if (roomId) {
-      s.emit("join-room", roomId, {
-        name: user?.displayName || "Anonymous",
-        photo: user?.photoURL,
-      });
-    }
+    const join = () => s.send("join-room", {
+      roomId,
+      user: { id: user?.uid, name: user?.displayName || "Anonymous" },
+    });
+    s.on<CollaborationStatus>("status", (status) => {
+      setConnectionStatus(status);
+      if (status === "connected") join();
+    });
 
-    s.on("room-state", (state: any) => {
+    s.on<CollaborationRoomState>("room-state", (state) => {
+      revisionRef.current = state.revision;
+      setActiveUsers(state.users || []);
       if (state.objects && state.objects.length > 0) {
         setObjects(state.objects);
-        setHistory([state.objects]);
+        setHistory([structuredClone(state.objects)]);
         setHistoryStep(0);
         historyStepRef.current = 0;
       }
     });
 
-    s.on("canvas-updated", (newObjects: CanvasObject[]) => {
-      setObjects(newObjects);
+    s.on<{ objects: CanvasObject[]; revision: number }>("canvas-updated", (event) => {
+      revisionRef.current = event.revision;
+      setObjects(event.objects);
+    });
+    s.on<CollaborationUser[]>("presence-updated", (users) => setActiveUsers(users));
+    s.on<{ message?: string }>("collaboration-error", (error) => {
+      setConnectionStatus("failed");
+      toast.error(error.message || "Realtime collaboration is unavailable.");
     });
 
-    s.on("user-joined", (u) => console.log("User joined", u));
-    s.on("user-left", (uId) => console.log("User left", uId));
-
-    return () => {
-      s.disconnect();
-    };
-  }, [roomId, user]);
+    s.connect();
+    return () => s.close();
+  }, [roomId, user?.displayName, user?.uid]);
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
@@ -281,6 +372,65 @@ export default function Editor() {
     };
   }, []);
 
+  const persistMeme = useCallback(async (announce = false) => {
+    if (!user) {
+      setSaveStatus("offline");
+      if (announce) toast.info("Sign in to save this meme to the cloud.");
+      return false;
+    }
+    if (!db || db.app.options.projectId === "MOCK") {
+      setSaveStatus("offline");
+      if (announce) toast.error("Firebase is not configured.");
+      return false;
+    }
+    const background = resolveBackground(
+      uploadedImageUrl,
+      uploadedImagePath,
+      template?.url,
+      template?.storagePath,
+    );
+    const containsTemporaryMedia = [
+      background.url,
+      ...objectsRef.current.map((object) => object.url),
+    ].some((url) => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:")));
+    if (containsTemporaryMedia) {
+      setSaveStatus("failed");
+      if (announce) toast.error("Sign in before adding media so it can be stored safely, then add the image again.");
+      return false;
+    }
+
+    setSaving(true);
+    setSaveStatus("saving");
+    try {
+      const reference = doc(db, "memes", roomId);
+      const snapshot = await getDoc(reference);
+      if (snapshot.exists() && snapshot.data().authorId !== user.uid) {
+        throw new Error("You are not the author of this meme.");
+      }
+      const payload = buildMemeDocument({
+        objects: objectsRef.current,
+        authorId: snapshot.exists() ? snapshot.data().authorId : user.uid,
+        createdAt: snapshot.exists() ? snapshot.data().createdAt : new Date().toISOString(),
+        uploadedUrl: uploadedImageUrl,
+        uploadedPath: uploadedImagePath,
+        templateUrl: template?.url,
+        templatePath: template?.storagePath,
+      });
+      await setDoc(reference, payload);
+      setHasUnsavedChanges(false);
+      setSaveStatus("saved");
+      if (announce) toast.success("Saved to the cloud.");
+      return true;
+    } catch (error) {
+      setSaveStatus("failed");
+      if (announce) toast.error(error instanceof Error ? error.message : "Could not save this meme.");
+      handleFirestoreError(error, OperationType.WRITE, `memes/${roomId}`);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [roomId, template?.storagePath, template?.url, uploadedImagePath, uploadedImageUrl, user]);
+
   // Auto-save logic
   useEffect(() => {
     if (!hasUnsavedChanges || !stageRef.current) return;
@@ -314,45 +464,16 @@ export default function Editor() {
   }, [objects, hasUnsavedChanges, roomId, template?.name, template?.url, uploadedImageUrl]);
 
   useEffect(() => {
-    // Only auto-save to cloud if signed in, not mocking, and there are actually unsaved changes
-    if (!user || (!db || db.app.options.projectId === "MOCK") || !hasUnsavedChanges) {
-      return; 
+    if (!hasUnsavedChanges) return;
+    if (!user || !db || db.app.options.projectId === "MOCK") {
+      setSaveStatus("offline");
+      return;
     }
 
-    const timer = setTimeout(async () => {
-      setSaving(true);
-      try {
-        const ref = doc(db, "memes", roomId);
-        const snap = await getDoc(ref);
-        
-        // If it exists and user is not author, don't overwrite
-        if (snap.exists() && snap.data().authorId !== user.uid) {
-          setSaving(false);
-          return;
-        }
-
-        await setDoc(
-          ref,
-          {
-            objects,
-            templateUrl: uploadedImageUrl || template?.url || null,
-            authorId: snap.exists() ? snap.data().authorId : user.uid,
-            createdAt: snap.exists()
-              ? snap.data().createdAt
-              : new Date().toISOString(),
-          },
-          { merge: true },
-        );
-        setHasUnsavedChanges(false);
-      } catch (err) {
-         handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
-      } finally {
-         setSaving(false);
-      }
-    }, 2000); // 2 second delay of inactivity
+    const timer = setTimeout(() => void persistMeme(false), 2000);
     
     return () => clearTimeout(timer);
-  }, [objects, user, roomId, template?.url, uploadedImageUrl, hasUnsavedChanges]);
+  }, [objects, user, hasUnsavedChanges, persistMeme]);
 
   const emitUpdate = useCallback(
     (newObjects: CanvasObject[], skipHistory = false, skipSocket = false) => {
@@ -361,16 +482,14 @@ export default function Editor() {
         pushToHistory(newObjects);
       }
       markDirty();
-      if (socket && !skipSocket) {
-        socket.emit("canvas-update", roomId, newObjects);
-      }
+      if (!skipSocket) sendSocketUpdate(newObjects);
     },
-    [socket, roomId, markDirty, pushToHistory],
+    [markDirty, pushToHistory, sendSocketUpdate],
   );
 
   const addText = useCallback(() => {
     const newObj: CanvasObject = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       type: "text",
       x: logicalSize.width / 2 - 50,
       y: logicalSize.height / 2 - 20,
@@ -390,11 +509,8 @@ export default function Editor() {
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
-        if (!file.type.startsWith("image/")) {
-          toast.error("Please upload an image file.");
-          return;
-        }
         try {
+          validateImageFile(file);
           const { default: imageCompression } =
             await import("browser-image-compression");
           const options = {
@@ -403,23 +519,24 @@ export default function Editor() {
             useWebWorker: true,
             initialQuality: 0.72,
           };
-          const compressedFile = await imageCompression(file, options);
-          const reader = new FileReader();
-          reader.onload = () => {
-            const newObj: CanvasObject = {
-              id: uuidv4(),
-              type: "image",
-              url: reader.result as string,
-              x: logicalSize.width / 2 - 100,
-              y: logicalSize.height / 2 - 100,
-              scaleX: 1,
-              scaleY: 1,
-              draggable: true,
-            };
-            const newObjs = [...objectsRef.current, newObj];
-            emitUpdate(newObjs);
+          const compressedFile = file.type === "image/gif" ? file : await imageCompression(file, options);
+          const mediaId = crypto.randomUUID();
+          const stored = user
+            ? await storeUserMedia(user.uid, "elements", mediaId, compressedFile)
+            : { url: URL.createObjectURL(compressedFile), storagePath: undefined };
+          if (!user) toast.info("This image is stored only on this device until you sign in and add it again.");
+          const newObj: CanvasObject = {
+            id: mediaId,
+            type: "image",
+            url: stored.url,
+            storagePath: stored.storagePath,
+            x: logicalSize.width / 2 - 100,
+            y: logicalSize.height / 2 - 100,
+            scaleX: 1,
+            scaleY: 1,
+            draggable: true,
           };
-          reader.readAsDataURL(compressedFile);
+          emitUpdate([...objectsRef.current, newObj]);
         } catch (error) {
           console.error("Compression error:", error);
           toast.error("Could not add that image.");
@@ -428,7 +545,7 @@ export default function Editor() {
         }
       }
     },
-    [logicalSize, emitUpdate],
+    [logicalSize, emitUpdate, user],
   );
 
   const handleDragEnd = useCallback(
@@ -486,11 +603,8 @@ export default function Editor() {
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (!file.type.startsWith("image/")) {
-        toast.error("Please upload an image file.");
-        return;
-      }
       try {
+        validateImageFile(file);
         const { default: imageCompression } =
           await import("browser-image-compression");
         const options = {
@@ -499,14 +613,14 @@ export default function Editor() {
           useWebWorker: true,
           initialQuality: 0.72,
         };
-        const compressedFile = await imageCompression(file, options);
-        const reader = new FileReader();
-        reader.onload = () => {
-          setUploadedImageUrl(reader.result as string);
-          markDirty();
-          toast.success("Background uploaded. Click Save Now to keep it.");
-        };
-        reader.readAsDataURL(compressedFile);
+        const compressedFile = file.type === "image/gif" ? file : await imageCompression(file, options);
+        const stored = user
+          ? await storeUserMedia(user.uid, "backgrounds", roomId, compressedFile)
+          : { url: URL.createObjectURL(compressedFile), storagePath: undefined };
+        setUploadedImageUrl(stored.url);
+        setUploadedImagePath(stored.storagePath || null);
+        markDirty();
+        toast.success(user ? "Background uploaded and queued for autosave." : "Background added locally. Sign in before adding it to save it in the cloud.");
       } catch (error) {
         console.error("Compression error:", error);
         toast.error("Could not upload that background image.");
@@ -518,72 +632,34 @@ export default function Editor() {
 
   const handleAIGenerateMeme = async (prompt: string) => {
     if (!prompt) return;
+    if (!user) {
+      toast.error("Sign in with an active Pro plan to use AI generation.");
+      return;
+    }
     setGeneratingAI(true);
-    let newMemeData: any = null;
-    let bgUrl: string | null = null;
-
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
     try {
-      // 1. Get meme layout and background idea via chat-to-meme
       toast.info("Thinking of a meme idea...");
-      const chatRes = await fetch(apiUrl("/api/chat-to-meme"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: prompt }),
-      });
-      if (!chatRes.ok) {
-        const errorData = await chatRes.json().catch(() => null);
-        let errMsg = errorData?.error || "Failed to chat-to-meme";
-        if (errMsg.includes("dunning decision")) {
-          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-        }
-        throw new Error(errMsg);
-      }
-      const chatData = await chatRes.json();
-      if (!chatData.success || !chatData.memeDraft) {
-        let errMsg = chatData.error || "Invalid response from chat-to-meme";
-        if (errMsg && typeof errMsg === 'string' && errMsg.includes("dunning decision")) {
-          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-        }
-        throw new Error(errMsg);
-      }
+      const chatData = await apiFetch<{
+        memeDraft: { backgroundPrompt: string; texts: Array<{ text?: string; x?: number; y?: number }> };
+      }>("/api/chat-to-meme", { method: "POST", body: JSON.stringify({ text: prompt }), signal: controller.signal }, { user, timeoutMs: 35_000 });
 
-      newMemeData = chatData.memeDraft;
-      
-      // 2. Generate the background image
-      toast.info(`Generating image: ${newMemeData.backgroundPrompt}`);
-      const bgRes = await fetch(apiUrl("/api/generate-meme"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: newMemeData.backgroundPrompt }),
-      });
-      if (!bgRes.ok) {
-        const errorData = await bgRes.json().catch(() => null);
-        let errMsg = errorData?.error || "Failed to generate background";
-        if (errMsg.includes("dunning decision")) {
-          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-        }
-        throw new Error(errMsg);
-      }
-      const bgData = await bgRes.json();
-      if (!bgData.success || !bgData.imageUrl) {
-        let errMsg = bgData.error || "Failed to generate image";
-        if (errMsg && typeof errMsg === 'string' && errMsg.includes("dunning decision")) {
-          errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings.";
-        }
-        throw new Error(errMsg);
-      }
+      toast.info("Generating the background...");
+      const background = await apiFetch<{ imageUrl: string; storagePath: string }>(
+        "/api/generate-meme",
+        { method: "POST", body: JSON.stringify({ text: chatData.memeDraft.backgroundPrompt }), signal: controller.signal },
+        { user, timeoutMs: 50_000 },
+      );
+      setUploadedImageUrl(background.imageUrl);
+      setUploadedImagePath(background.storagePath);
 
-      bgUrl = bgData.imageUrl;
-      setUploadedImageUrl(bgUrl);
-      
-      // Give the image a sec to load to determine logical size, 
-      // but we can generate objects array based on 600x600 layout
-      const newObjs = newMemeData.texts.map((t: any) => ({
-        id: uuidv4(),
-        type: "text",
-        x: t.x || 50,
-        y: t.y || 50,
-        text: t.text?.toUpperCase() || "",
+      const newObjs: CanvasObject[] = chatData.memeDraft.texts.map((text) => ({
+        id: crypto.randomUUID(),
+        type: "text" as const,
+        x: text.x || 50,
+        y: text.y || 50,
+        text: text.text?.toUpperCase() || "",
         fontSize: 40,
         fontFamily: "Impact, sans-serif",
         fill: "#ffffff",
@@ -594,45 +670,39 @@ export default function Editor() {
 
       emitUpdate(newObjs);
       toast.success("Meme generated!");
-
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e.message || "Error generating meme");
+    } catch (error) {
+      if (controller.signal.aborted) toast.info("AI generation cancelled.");
+      else toast.error(error instanceof Error ? error.message : "Could not generate the meme.");
     } finally {
+      if (aiAbortRef.current === controller) aiAbortRef.current = null;
       setGeneratingAI(false);
     }
   };
 
   const handleAIGenerateBackground = async (prompt: string) => {
     if (!prompt) return;
+    if (!user) {
+      toast.error("Sign in with an active Pro plan to use AI generation.");
+      return;
+    }
     setGeneratingAI(true);
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
-      const res = await fetch(apiUrl("/api/generate-meme"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: prompt }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) { const errorData = await res.json().catch(() => null); let errMsg = errorData?.error || "AI Generator request failed"; if (errMsg && typeof errMsg === "string" && errMsg.includes("dunning decision")) { errMsg = "Your Google Cloud billing account is suspended (unpaid balance). Please check your billing settings."; } throw new Error(errMsg); }
-
-      const data = await res.json();
-      if (data.success && data.imageUrl) {
-        setUploadedImageUrl(data.imageUrl);
-      } else {
-        toast.error(data.error || "Failed to generate image.");
-      }
-    } catch (e: any) {
-      console.error(e);
-      if (e.name === "AbortError") {
-        toast.error("AI Generation timed out. Please try again.");
-      } else {
-        toast.error(e.message || "Error generating image.");
-      }
+      const data = await apiFetch<{ imageUrl: string; storagePath: string }>(
+        "/api/generate-meme",
+        { method: "POST", body: JSON.stringify({ text: prompt }), signal: controller.signal },
+        { user, timeoutMs: 50_000 },
+      );
+      setUploadedImageUrl(data.imageUrl);
+      setUploadedImagePath(data.storagePath);
+      markDirty();
+      toast.success("Background generated and queued for autosave.");
+    } catch (error) {
+      if (controller.signal.aborted) toast.info("AI generation cancelled.");
+      else toast.error(error instanceof Error ? error.message : "Could not generate the image.");
     } finally {
+      if (aiAbortRef.current === controller) aiAbortRef.current = null;
       setGeneratingAI(false);
     }
   };
@@ -652,74 +722,28 @@ export default function Editor() {
         const bgUrl = uploadedImageUrl || template?.url;
         if (!bgUrl) throw new Error("No background GIF to export");
 
-        toast.info(
-          "Generating GIF, please wait... (this might take a few seconds)",
-        );
-        const buffer = await fetch(bgUrl).then((r) => r.arrayBuffer());
-        const { decodeFrames, encode } = await import("modern-gif");
-        const frames = await decodeFrames(buffer);
+        toast.info("Encoding the GIF in the background. You can cancel at any time.");
+        const controller = new AbortController();
+        exportAbortRef.current = controller;
+        setExportProgress(0);
 
-        // Hide background image for pure text overlay
         const bgNode = stageRef.current.findOne(".bg-image-node");
         if (bgNode) bgNode.hide();
-
-        const targetWidth = logicalSize.width * exportScale;
-        const targetHeight = logicalSize.height * exportScale;
-
+        const safeScale = Math.min(exportScale, 2, 1_000 / Math.max(logicalSize.width, logicalSize.height));
+        const targetWidth = Math.max(1, Math.round(logicalSize.width * safeScale));
+        const targetHeight = Math.max(1, Math.round(logicalSize.height * safeScale));
         const overlayDataUrl = stageRef.current.toDataURL({
-          pixelRatio: exportScale / renderScale,
+          pixelRatio: safeScale / renderScale,
         });
         if (bgNode) bgNode.show();
-
-        const overlayImage = await new Promise<HTMLImageElement>(
-          (resolve, reject) => {
-            const img = new Image();
-            img.crossOrigin = "Anonymous";
-            img.onload = () => resolve(img);
-            img.onerror = reject;
-            img.src = overlayDataUrl;
-          },
-        );
-
-        const offscreen = document.createElement("canvas");
-        offscreen.width = targetWidth;
-        offscreen.height = targetHeight;
-        const ctx = offscreen.getContext("2d")!;
-
-        const newFrames = [];
-        for (const frame of frames) {
-          const frameCanvas = document.createElement("canvas");
-          frameCanvas.width = frame.width;
-          frameCanvas.height = frame.height;
-          frameCanvas
-            .getContext("2d")!
-            .putImageData(
-              new ImageData(
-                new Uint8ClampedArray(frame.data),
-                frame.width,
-                frame.height,
-              ),
-              0,
-              0,
-            );
-
-          ctx.clearRect(0, 0, targetWidth, targetHeight);
-          ctx.drawImage(frameCanvas, 0, 0, targetWidth, targetHeight);
-          ctx.drawImage(overlayImage, 0, 0, targetWidth, targetHeight);
-
-          newFrames.push({
-            data: ctx.getImageData(0, 0, targetWidth, targetHeight).data,
-            delay: frame.delay,
-          });
-        }
-
-        const output = await encode({
+        const blob = await encodeGifInWorker({
+          sourceUrl: bgUrl,
+          overlayDataUrl,
           width: targetWidth,
           height: targetHeight,
-          frames: newFrames,
+          signal: controller.signal,
+          onProgress: setExportProgress,
         });
-
-        const blob = new Blob([output], { type: "image/gif" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.download = `meme-${roomId}.gif`;
@@ -729,26 +753,32 @@ export default function Editor() {
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
         toast.success("GIF exported!");
-      } catch (e: any) {
-        toast.error("Failed to export GIF: " + e.message);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") toast.info("GIF export cancelled.");
+        else toast.error(`Failed to export GIF: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        setHasUnsavedChanges(false);
+        exportAbortRef.current = null;
+        setExportProgress(0);
         setIsExporting(false);
       }
     } else {
-      const uri = stageRef.current.toDataURL({
-        pixelRatio: exportScale / renderScale,
-        mimeType: finalFormat,
-        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
-      });
-      const link = document.createElement("a");
-      link.download = `meme-${roomId}.${finalFormat === "image/png" ? "png" : "jpg"}`;
-      link.href = uri;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setHasUnsavedChanges(false);
-      setIsExporting(false);
+      try {
+        const uri = stageRef.current.toDataURL({
+          pixelRatio: exportScale / renderScale,
+          mimeType: finalFormat,
+          quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
+        });
+        const link = document.createElement("a");
+        link.download = `meme-${roomId}.${finalFormat === "image/png" ? "png" : "jpg"}`;
+        link.href = uri;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Could not export this meme.");
+      } finally {
+        setIsExporting(false);
+      }
     }
   };
 
@@ -770,7 +800,7 @@ export default function Editor() {
     document.body.removeChild(link);
   };
 
-  const getRenderedMemeDataUrl = async () => {
+  const renderMemeBlob = async (mimeType: "image/png" | "image/jpeg" = "image/png") => {
     if (!stageRef.current) throw new Error("Canvas is not ready");
     setSelectedId(null);
     setIsExporting(true);
@@ -780,32 +810,62 @@ export default function Editor() {
     const pixelRatio = Math.min(1, 900 / maxDimension);
     const uri = stageRef.current.toDataURL({
       pixelRatio: pixelRatio / renderScale,
-      mimeType: "image/jpeg",
-      quality: 0.72,
+      mimeType,
+      quality: mimeType === "image/jpeg" ? 0.82 : undefined,
     });
-    setIsExporting(false);
-    return uri;
+    return dataUrlToBlob(uri);
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.download = filename;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const finishMeme = async () => {
+    try {
+      const blob = await renderMemeBlob("image/png");
+      const file = new File([blob], `meme-${roomId}.png`, { type: "image/png" });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: "My Memeforge creation", files: [file] });
+      } else {
+        downloadBlob(blob, file.name);
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        toast.error(error instanceof Error ? error.message : "Could not finish the meme.");
+      }
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const submitMemeToDatabase = async () => {
-    if (!user) return toast.error("Must be signed in to submit!");
+    if (!user) return toast.error("Sign in to publish this meme.");
     if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
     setSaving(true);
 
-    const docId = uuidv4();
+    const docId = crypto.randomUUID();
     try {
-      const uri = await getRenderedMemeDataUrl();
+      const blob = await renderMemeBlob("image/jpeg");
+      const stored = await storeUserMedia(user.uid, "submissions", docId, blob);
       const ref = doc(db, "submissions", docId);
-      await setDoc(ref, {
+      const submission: SubmissionDocument = {
         userId: user.uid,
         userName: user.displayName || "Anonymous",
-        memeUrl: uri,
+        memeUrl: stored.url,
+        storagePath: stored.storagePath,
         createdAt: new Date().toISOString(),
-      });
-      toast.success("Meme submitted to the database successfully!");
-    } catch (e: any) {
-      console.error(e);
-      handleFirestoreError(e, OperationType.WRITE, `submissions/${docId}`);
+      };
+      await setDoc(ref, submission);
+      toast.success("Published to the gallery.");
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `submissions/${docId}`);
     } finally {
       setSaving(false);
       setIsExporting(false);
@@ -816,20 +876,23 @@ export default function Editor() {
     if (!user) return toast.error("Must be signed in to save as template!");
     if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
     setSaving(true);
-    const newTemplateId = uuidv4();
+    const newTemplateId = crypto.randomUUID();
     try {
-      const renderedUrl = await getRenderedMemeDataUrl();
+      const blob = await renderMemeBlob("image/jpeg");
+      const stored = await storeUserMedia(user.uid, "templates", newTemplateId, blob);
       const ref = doc(db, "templates", newTemplateId);
-      await setDoc(ref, {
+      const savedTemplate: TemplateDocument = {
         userId: user.uid,
         userName: user.displayName || "Anonymous",
         name: template?.name ? `${template.name} remix` : "Saved meme template",
-        url: renderedUrl,
+        url: stored.url,
+        storagePath: stored.storagePath,
         width: logicalSize.width,
         height: logicalSize.height,
         box_count: 2,
         createdAt: new Date().toISOString(),
-      });
+      };
+      await setDoc(ref, savedTemplate);
       setHasUnsavedChanges(false);
       toast.success("Saved meme as a reusable template!");
       navigate(`/editor/template_${newTemplateId}`, {
@@ -837,7 +900,8 @@ export default function Editor() {
           template: {
             id: newTemplateId,
             name: template?.name ? `${template.name} remix` : "Saved meme template",
-            url: renderedUrl,
+            url: stored.url,
+            storagePath: stored.storagePath,
             width: logicalSize.width,
             height: logicalSize.height,
             box_count: 2,
@@ -853,36 +917,7 @@ export default function Editor() {
   };
 
   const saveToFirebase = async () => {
-    if (!user) return toast.error("Must be signed in to save!");
-    if (!db || db.app.options.projectId === "MOCK") return toast.error("Firebase is not configured.");
-    setSaving(true);
-    try {
-      const ref = doc(db, "memes", roomId!);
-      const snap = await getDoc(ref);
-      if (snap.exists() && snap.data().authorId !== user.uid) {
-        toast.error("You are not the author of this meme!");
-        setSaving(false);
-        return;
-      }
-      await setDoc(
-        ref,
-        {
-          objects,
-          templateUrl: uploadedImageUrl || template?.url || null,
-          authorId: snap.exists() ? snap.data().authorId : user.uid,
-          createdAt: snap.exists()
-            ? snap.data().createdAt
-            : new Date().toISOString(),
-        },
-        { merge: true },
-      );
-      setHasUnsavedChanges(false);
-      toast.success("Saved successfully!");
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
-    } finally {
-      setSaving(false);
-    }
+    await persistMeme(true);
   };
 
   const deleteSelected = () => {
@@ -899,7 +934,7 @@ export default function Editor() {
 
     const newObj = {
       ...objToCopy,
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       x: objToCopy.x + 20,
       y: objToCopy.y + 20,
     };
@@ -1113,14 +1148,14 @@ export default function Editor() {
     [isGridEnabled, renderScale]
   );
 
-  const exportMemeRef = useRef(exportMeme);
   const handleUndoRef = useRef(handleUndo);
   const handleRedoRef = useRef(handleRedo);
+  const saveToFirebaseRef = useRef(saveToFirebase);
 
   useEffect(() => {
-    exportMemeRef.current = exportMeme;
     handleUndoRef.current = handleUndo;
     handleRedoRef.current = handleRedo;
+    saveToFirebaseRef.current = saveToFirebase;
   });
 
   useEffect(() => {
@@ -1144,6 +1179,9 @@ export default function Editor() {
           handleUndoRef.current();
         }
       } else if (cmdOrCtrl && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void saveToFirebaseRef.current();
+      } else if (cmdOrCtrl && e.shiftKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
         setShowExportModal(true);
       }
@@ -1440,7 +1478,7 @@ export default function Editor() {
                       position={{ x: obj.x, y: obj.y }}
                       scale={renderScale}
                       onStart={() => setSelectedId(obj.id)}
-                      onStop={(e, data) => {
+                      onStop={(_event, data) => {
                         const newObjs = objectsRef.current.map((o) =>
                           o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
                         );
@@ -1550,6 +1588,7 @@ export default function Editor() {
                 <AIMemeChatInput
                   onGenerateMeme={handleAIGenerateMeme}
                   generatingAI={generatingAI}
+                  onCancel={() => aiAbortRef.current?.abort()}
                 />
               </div>
 
@@ -1594,7 +1633,7 @@ export default function Editor() {
                 <div className="flex gap-2 w-full col-span-2">
                   <button
                     onClick={handleUndo}
-                    disabled={historyStepRef.current <= 0}
+                    disabled={historyStep <= 0}
                     className="flex-1 flex items-center justify-center py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Undo"
                   >
@@ -1602,7 +1641,7 @@ export default function Editor() {
                   </button>
                   <button
                     onClick={handleRedo}
-                    disabled={historyStepRef.current >= history.length - 1 || history.length === 0}
+                    disabled={historyStep >= history.length - 1 || history.length === 0}
                     className="flex-1 flex items-center justify-center py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold transition-all border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Redo"
                   >
@@ -1664,6 +1703,7 @@ export default function Editor() {
                   <AIPromptInput
                     onGenerate={handleAIGenerateBackground}
                     generatingAI={generatingAI}
+                    onCancel={() => aiAbortRef.current?.abort()}
                   />
                 </div>
               </div>
@@ -2099,56 +2139,87 @@ export default function Editor() {
 
           <div className="flex-1 border-t border-white/5 pt-6 flex flex-col">
             <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">
-              Export & Sync
+              Finish & collaborate
             </h3>
             <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-zinc-950 border border-white/5 text-xs">
+                <span className="text-zinc-500">Cloud save</span>
+                <span className={saveStatus === "failed" ? "text-rose-400" : saveStatus === "saved" ? "text-emerald-400" : "text-zinc-300"}>
+                  {saveStatus === "saving" || saving
+                    ? "Saving…"
+                    : saveStatus === "saved"
+                      ? "Saved"
+                      : saveStatus === "failed"
+                        ? "Save failed"
+                        : saveStatus === "offline"
+                          ? "Local only"
+                          : hasUnsavedChanges
+                            ? "Autosave pending"
+                            : "Up to date"}
+                </span>
+              </div>
+              {saveStatus === "failed" && (
                 <button
-                  onClick={saveToFirebase}
-                  disabled={saving || !hasUnsavedChanges}
-                  className="flex items-center gap-2 justify-center w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)] text-xs disabled:opacity-50"
+                  onClick={() => void saveToFirebase()}
+                  disabled={saving}
+                  className="flex items-center gap-2 justify-center w-full py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 rounded-xl font-bold border border-rose-500/20"
                 >
-                  <Save className="w-4 h-4" />{" "}
-                  {saving ? "Saving..." : "Save Now"}
+                  <Save className="w-4 h-4" /> Retry save
                 </button>
+              )}
+
+              <button
+                onClick={() => void finishMeme()}
+                disabled={isExporting}
+                className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg disabled:opacity-50"
+              >
+                {isExporting ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Share2 className="w-4 h-4" />}
+                {isExporting && exportProgress ? `Encoding ${exportProgress}%` : isExporting ? "Preparing…" : "Share or download"}
+              </button>
+              {isExporting && exportAbortRef.current && (
+                <button onClick={() => exportAbortRef.current?.abort()} className="text-xs text-rose-400 hover:text-rose-300 font-bold">
+                  Cancel export
+                </button>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={saveAsTemplateToFirebase}
                   disabled={saving}
                   className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl font-bold transition-all border border-white/5 text-xs"
                 >
                   <ImagePlus className="w-4 h-4" />
-                  Template
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <button
-                  onClick={() => exportMeme("image/png")}
-                  disabled={isExporting}
-                  className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg disabled:opacity-50"
-                >
-                  {isExporting ? (
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  {isExporting ? "Processing..." : "Download PNG"}
+                  Save template
                 </button>
                 <button
                   onClick={() => setShowExportModal(true)}
-                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-100 hover:bg-white text-zinc-900 rounded-xl font-bold transition-all shadow-lg"
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl font-bold transition-all border border-white/5 text-xs"
                 >
-                  <Download className="w-4 h-4" /> Export Configuration
-                </button>
-                <button
-                  onClick={submitMemeToDatabase}
-                  disabled={saving}
-                  className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl font-bold transition-all border border-white/5 disabled:opacity-50"
-                >
-                  <CloudUpload className="w-4 h-4" /> Submit to Database
+                  <Download className="w-4 h-4" /> Advanced export
                 </button>
               </div>
 
+              <button
+                onClick={submitMemeToDatabase}
+                disabled={saving}
+                className="flex items-center gap-2 justify-center w-full py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 rounded-xl font-bold border border-white/5 disabled:opacity-50 text-xs"
+              >
+                <CloudUpload className="w-4 h-4" /> Publish to gallery
+              </button>
+
+              <div className="px-3 py-2 rounded-xl bg-zinc-950 border border-white/5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-500">Realtime room</span>
+                  <span className={connectionStatus === "connected" ? "text-emerald-400" : connectionStatus === "failed" ? "text-rose-400" : "text-amber-400"}>
+                    {connectionStatus} · {activeUsers.length} here
+                  </span>
+                </div>
+                {activeUsers.length > 0 && (
+                  <p className="mt-1 text-[10px] text-zinc-600 truncate" title={activeUsers.map((participant) => participant.name).join(", ")}>
+                    {activeUsers.map((participant) => participant.name).join(", ")}
+                  </p>
+                )}
+              </div>
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(window.location.href);
@@ -2156,38 +2227,8 @@ export default function Editor() {
                 }}
                 className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl font-bold transition-all border border-emerald-500/20 mt-2"
               >
-                <Users className="w-4 h-4" /> Invite Collaborator
+                <Users className="w-4 h-4" /> Copy collaborator link
               </button>
-
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                <button
-                  onClick={() => {
-                    const url = encodeURIComponent(window.location.href);
-                    const text = encodeURIComponent(
-                      "Help me make this epic meme on MemeForge!",
-                    );
-                    window.open(
-                      `https://twitter.com/intent/tweet?url=${url}&text=${text}`,
-                      "_blank",
-                    );
-                  }}
-                  className="flex items-center justify-center gap-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 rounded-xl py-2 text-xs font-bold transition-all border border-sky-500/20"
-                >
-                  Twitter
-                </button>
-                <button
-                  onClick={() => {
-                    const url = encodeURIComponent(window.location.href);
-                    window.open(
-                      `https://www.facebook.com/sharer/sharer.php?u=${url}`,
-                      "_blank",
-                    );
-                  }}
-                  className="flex items-center justify-center gap-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 rounded-xl py-2 text-xs font-bold transition-all border border-blue-600/20"
-                >
-                  Facebook
-                </button>
-              </div>
             </div>
 
             <div className="mt-auto pt-6 pb-2">

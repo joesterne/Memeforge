@@ -2,12 +2,13 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { Check, Sparkles, Gem, ImagePlus, AlertCircle } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { apiUrl } from "../lib/api";
+import { apiFetch } from "../lib/api";
 
 export default function Pro() {
-  const { user } = useAuth();
+  const { user, entitlement, entitlementLoading } = useAuth();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const canManageBilling = Boolean(entitlement && !["inactive", "canceled"].includes(entitlement.status));
 
   const subscribe = async () => {
     if (!user) {
@@ -18,15 +19,12 @@ export default function Pro() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(apiUrl("/api/create-checkout-session"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" }
-      });
-      const data = await res.json();
-      if (res.ok && data.url) {
+      const endpoint = canManageBilling ? "/api/create-portal-session" : "/api/create-checkout-session";
+      const data = await apiFetch<{ url: string }>(endpoint, { method: "POST" }, { user });
+      if (data.url) {
         window.location.href = data.url;
       } else {
-        setErrorMsg(data.error || "Checkout session generation failed");
+        setErrorMsg("Billing session generation failed");
       }
     } catch (e) {
       console.error(e);
@@ -43,7 +41,10 @@ export default function Pro() {
           <Sparkles className="w-4 h-4" /> Memeforge Pro
         </div>
         <h1 className="text-4xl md:text-5xl font-bold mb-4 tracking-tight">Level Up Your Meme Game</h1>
-        <p className="text-zinc-400 text-lg max-w-xl mx-auto">Get access to premium features, AI generation, watermark removal, and priority support.</p>
+        <p className="text-zinc-400 text-lg max-w-xl mx-auto">Unlock authenticated AI generation with predictable usage limits and self-service subscription management.</p>
+        {entitlement && (
+          <p className="mt-3 text-xs text-zinc-500">Verified billing status: <span className="capitalize text-zinc-300">{entitlement.status}</span></p>
+        )}
       </div>
 
       {errorMsg && (
@@ -52,11 +53,6 @@ export default function Pro() {
             <AlertCircle className="w-5 h-5" />
             <p>{errorMsg}</p>
           </div>
-          {errorMsg.includes("STRIPE_SECRET_KEY") && (
-            <p className="text-sm mt-2 opacity-80">
-              Please open the Settings menu and configure your Stripe API Key in the Secrets panel to enable checkout.
-            </p>
-          )}
         </div>
       )}
 
@@ -76,7 +72,7 @@ export default function Pro() {
               <Check className="w-5 h-5 text-zinc-500" /> Basic text editing
             </li>
             <li className="flex items-center gap-3 text-zinc-300">
-              <Check className="w-5 h-5 text-zinc-500" /> Save up to 10 memes
+              <Check className="w-5 h-5 text-zinc-500" /> Local and cloud save workflows
             </li>
           </ul>
           
@@ -100,25 +96,29 @@ export default function Pro() {
           
           <ul className="space-y-4 mb-8 w-full flex-1 relative z-10">
             <li className="flex items-center gap-3 text-indigo-100">
-              <Sparkles className="w-5 h-5 text-indigo-400" /> Unlimited AI template generation
+              <Sparkles className="w-5 h-5 text-indigo-400" /> AI layouts and images (usage limits apply)
             </li>
             <li className="flex items-center gap-3 text-indigo-100">
-              <ImagePlus className="w-5 h-5 text-indigo-400" /> HD exports & no watermarks
+              <ImagePlus className="w-5 h-5 text-indigo-400" /> Image, GIF, and native-share exports
             </li>
             <li className="flex items-center gap-3 text-indigo-100">
-              <Check className="w-5 h-5 text-indigo-400" /> Advanced styling options
+              <Check className="w-5 h-5 text-indigo-400" /> Self-service billing portal
             </li>
             <li className="flex items-center gap-3 text-indigo-100">
-              <Check className="w-5 h-5 text-indigo-400" /> Unlimited saves
+              <Check className="w-5 h-5 text-indigo-400" /> Everything in Free Starter
             </li>
           </ul>
           
           <button 
             onClick={subscribe}
-            disabled={loading}
+            disabled={loading || entitlementLoading}
             className="w-full px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50 relative z-10"
           >
-            {loading ? "Redirecting to checkout..." : "Upgrade to Pro"}
+            {loading
+              ? "Opening billing..."
+              : canManageBilling
+                ? "Manage subscription"
+                : "Upgrade to Pro"}
           </button>
         </div>
       </div>

@@ -5,6 +5,7 @@ export interface CanvasObject {
   y: number;
   text?: string;
   url?: string;
+  storagePath?: string;
   fontSize?: number;
   fontFamily?: string;
   fill?: string;

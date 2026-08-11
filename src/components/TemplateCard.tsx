@@ -1,6 +1,7 @@
 import React, { memo } from "react";
 import { Link } from "react-router";
 import { Heart, ArrowUp, ArrowDown } from "lucide-react";
+import type { TemplateVotes } from "../contexts/VotesContext";
 
 interface MemeTemplate {
   id: string;
@@ -17,7 +18,8 @@ interface TemplateCardProps {
   template: MemeTemplate;
   isFavorited: boolean;
   user: any;
-  votes?: { upvoters: string[]; downvoters: string[] };
+  votes?: TemplateVotes;
+  loadVotes?: (templateIds: string[]) => void;
   onVote?: (templateId: string, type: 'up' | 'down' | 'clear') => void;
   onFavorite: (
     e: React.MouseEvent,
@@ -33,6 +35,7 @@ const TemplateCard = memo(
     isFavorited,
     user,
     votes,
+    loadVotes,
     onVote,
     onFavorite,
     onMarkRecent,
@@ -43,12 +46,16 @@ const TemplateCard = memo(
       setImgSrc(template.url);
     }, [template.url]);
 
-    const upvotes = votes?.upvoters?.length || 0;
-    const downvotes = votes?.downvoters?.length || 0;
+    React.useEffect(() => {
+      loadVotes?.([template.id]);
+    }, [loadVotes, template.id]);
+
+    const upvotes = votes?.upvotes || 0;
+    const downvotes = votes?.downvotes || 0;
     const score = upvotes - downvotes;
 
-    const hasUpvoted = user && votes?.upvoters?.includes(user.uid);
-    const hasDownvoted = user && votes?.downvoters?.includes(user.uid);
+    const hasUpvoted = user && votes?.userVote === "up";
+    const hasDownvoted = user && votes?.userVote === "down";
 
     return (
       <div className="group relative rounded-3xl overflow-hidden shadow-lg hover:shadow-2xl transition-all duration-300 bg-zinc-900 border border-white/10 flex flex-col hover:border-indigo-500/50" style={{ contentVisibility: "auto", containIntrinsicSize: "200px" }}>
@@ -61,7 +68,7 @@ const TemplateCard = memo(
           <img
             src={imgSrc}
             loading="lazy"
-            onError={(e) => {
+            onError={() => {
               if (template.previewUrl && imgSrc !== template.previewUrl) {
                 setImgSrc(template.previewUrl);
               } else {

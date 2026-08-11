@@ -11,6 +11,7 @@
         "y": { "type": "number" },
         "text": { "type": "string" },
         "url": { "type": "string" },
+        "storagePath": { "type": "string" },
         "fontSize": { "type": "number" },
         "fontFamily": { "type": "string" },
         "fill": { "type": "string" },
@@ -29,6 +30,7 @@
         "authorId": { "type": "string" },
         "createdAt": { "type": "string" },
         "templateUrl": { "type": ["string", "null"] },
+        "templatePath": { "type": ["string", "null"] },
         "objects": { "type": "array", "items": { "$ref": "#/entities/CanvasObject" } }
       },
       "required": ["authorId", "createdAt", "objects"]
@@ -54,9 +56,10 @@
         "userId": { "type": "string" },
         "userName": { "type": "string" },
         "memeUrl": { "type": "string" },
+        "storagePath": { "type": "string" },
         "createdAt": { "type": "string" }
       },
-      "required": ["userId", "userName", "memeUrl", "createdAt"]
+      "required": ["userId", "userName", "memeUrl", "storagePath", "createdAt"]
     },
     "Template": {
       "title": "Template",
@@ -66,6 +69,7 @@
         "userId": { "type": "string" },
         "userName": { "type": "string" },
         "url": { "type": "string" },
+        "storagePath": { "type": "string" },
         "name": { "type": "string" },
         "width": { "type": "number" },
         "height": { "type": "number" },
@@ -79,10 +83,19 @@
       "description": "Upvotes and downvotes for a template",
       "type": "object",
       "properties": {
-        "upvoters": { "type": "array", "items": { "type": "string" } },
-        "downvoters": { "type": "array", "items": { "type": "string" } }
+        "upvotes": { "type": "number" },
+        "downvotes": { "type": "number" }
       },
-      "required": ["upvoters", "downvoters"]
+      "required": ["upvotes", "downvotes"]
+    },
+    "UserTemplateVote": {
+      "title": "UserTemplateVote",
+      "description": "Private vote state for one user and template",
+      "type": "object",
+      "properties": {
+        "value": { "type": "string", "enum": ["up", "down"] }
+      },
+      "required": ["value"]
     }
   },
   "firestore": {
@@ -104,7 +117,11 @@
     },
     "/templateVotes/{templateId}": {
       "schema": "#/entities/TemplateVote",
-      "description": "Votes for templates"
+      "description": "Public aggregate vote counts"
+    },
+    "/templateVotes/{templateId}/users/{uid}": {
+      "schema": "#/entities/UserTemplateVote",
+      "description": "Private per-user vote state"
     }
   }
 }

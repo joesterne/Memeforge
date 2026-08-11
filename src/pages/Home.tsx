@@ -28,6 +28,8 @@ import {
   deleteDoc,
   doc,
   setDoc,
+  limit,
+  orderBy,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import {
@@ -41,12 +43,14 @@ import { InfiniteScrollLoader } from "../components/InfiniteScrollLoader";
 import { toast } from "sonner";
 import { getRecentCreations, deleteRecentCreation, RecentMeme } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
-import { apiUrl } from "../lib/api";
+import { apiFetch } from "../lib/api";
+import { getUserMemePage, invalidateUserMemeCache } from "../lib/userContent";
 
 interface MemeTemplate {
   id: string;
   name: string;
   url: string;
+  storagePath?: string;
   previewUrl?: string;
   width: number;
   height: number;
@@ -62,7 +66,7 @@ let cachedTrends: string[] | null = null;
 
 export default function Home() {
   const { user } = useAuth();
-  const { votes, handleVote } = useVotes();
+  const { votes, loadVotes, handleVote } = useVotes();
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<MemeTemplate[]>(cachedMemes || []);
   const [search, setSearch] = useState("");
@@ -70,35 +74,29 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"still" | "gif">("still");
   const [loading, setLoading] = useState(!cachedMemes);
   const [searchingWeb, setSearchingWeb] = useState(false);
+  const [stillSearchResults, setStillSearchResults] = useState<MemeTemplate[]>([]);
+  const [stillSearchError, setStillSearchError] = useState<string | null>(null);
+  const [searchRetry, setSearchRetry] = useState(0);
   const [gifs, setGifs] = useState<MemeTemplate[]>([]);
   const [loadingGifs, setLoadingGifs] = useState(false);
-  const [gifPage, setGifPage] = useState(1);
   const [nextGifPos, setNextGifPos] = useState<string>("");
-  const GIFS_PER_PAGE = 20;
 
   useEffect(() => {
     let abortController: AbortController | null = null;
     if (activeTab === "gif") {
       const fetchGifs = async () => {
         setLoadingGifs(true);
-        setGifPage(1);
         setNextGifPos("");
         abortController = new AbortController();
         try {
           const query = deferredSearch.trim() || "trending meme";
-          const res = await fetch(
-            apiUrl(`/api/search-gifs?q=${encodeURIComponent(query)}`),
-            {
-              signal: abortController.signal,
-            },
+          const data = await apiFetch<{ gifs: MemeTemplate[]; next: string }>(
+            `/api/search-gifs?q=${encodeURIComponent(query)}`,
+            { signal: abortController.signal },
+            { timeoutMs: 10_000 },
           );
-          const data = await res.json();
-          if (data.success) {
-            setGifs(data.gifs || []);
-            setNextGifPos(data.next || "");
-          } else {
-            console.error("GIF API Error:", data.error);
-          }
+          setGifs(data.gifs || []);
+          setNextGifPos(data.next || "");
         } catch (e: any) {
           if (e.name !== "AbortError") {
             console.error("Failed to fetch GIFs:", e);
@@ -120,26 +118,42 @@ export default function Home() {
     setLoadingGifs(true);
     try {
       const query = deferredSearch.trim() || "trending meme";
-      const res = await fetch(
-        apiUrl(`/api/search-gifs?q=${encodeURIComponent(query)}&pos=${encodeURIComponent(nextGifPos)}`)
+      const data = await apiFetch<{ gifs: MemeTemplate[]; next: string }>(
+        `/api/search-gifs?q=${encodeURIComponent(query)}&pos=${encodeURIComponent(nextGifPos)}`,
+        {},
+        { timeoutMs: 10_000 },
       );
-      const data = await res.json();
-      if (data.success) {
-        setGifs(prev => {
-          const existingIds = new Set(prev.map(g => g.id));
-          const newGifs = (data.gifs || []).filter((g: any) => !existingIds.has(g.id));
-          return [...prev, ...newGifs];
-        });
-        setNextGifPos(data.next || "");
-        setGifPage(prev => prev + 1);
-      }
+      setGifs(prev => {
+        const existingIds = new Set(prev.map(g => g.id));
+        const newGifs = (data.gifs || []).filter((gif) => !existingIds.has(gif.id));
+        return [...prev, ...newGifs];
+      });
+      setNextGifPos(data.next || "");
     } catch (e) {
       console.error("Failed to fetch more GIFs:", e);
     } finally {
       setLoadingGifs(false);
     }
   }, [nextGifPos, loadingGifs, deferredSearch]);
-  const [webResultFetched, setWebResultFetched] = useState(false);
+
+  const refreshGifs = useCallback(async () => {
+    setLoadingGifs(true);
+    try {
+      const term = deferredSearch.trim() || "trending meme";
+      const data = await apiFetch<{ gifs: MemeTemplate[]; next: string }>(
+        `/api/search-gifs?q=${encodeURIComponent(term)}&random=true`,
+        {},
+        { timeoutMs: 10_000 },
+      );
+      setGifs(data.gifs || []);
+      setNextGifPos(data.next || "");
+    } catch (error) {
+      console.error("GIF refresh failed", error);
+      toast.error(error instanceof Error ? error.message : "Could not refresh GIFs.");
+    } finally {
+      setLoadingGifs(false);
+    }
+  }, [deferredSearch]);
   const [sortBy, setSortBy] = useState<SortOption>("trending");
   const [gifSortBy, setGifSortBy] = useState<SortOption>("trending");
   const [recentIds, setRecentIds] = useState<string[]>([]);
@@ -150,7 +164,6 @@ export default function Home() {
   const [recentCreations, setRecentCreations] = useState<RecentMeme[]>([]);
 
   const [favorites, setFavorites] = useState<Record<string, any>>({});
-  const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
 
   useEffect(() => {
@@ -183,43 +196,28 @@ export default function Home() {
 
     if (!cachedTrends || force) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const trendsRes = await fetch(apiUrl(`/api/trending-searches${force ? "?force=true" : ""}`), {
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-
-        if (trendsRes.ok) {
-          const trendsData = await trendsRes.json();
-          if (trendsData.success && Array.isArray(trendsData.terms)) {
-            trendsList = trendsData.terms;
-            cachedTrends = trendsList;
-          }
+        const trendsData = await apiFetch<{ terms: string[] }>(
+          "/api/trending-searches",
+          {},
+          { timeoutMs: 8_000 },
+        );
+        if (Array.isArray(trendsData.terms)) {
+          trendsList = trendsData.terms;
+          cachedTrends = trendsList;
         }
       } catch (e) {
-        console.error("Failed to fetch Google Trends", e);
+        console.error("Failed to fetch trending topics", e);
       }
     }
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch("https://api.imgflip.com/get_memes", {
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) throw new Error("Imgflip API failed");
-
-      const data = await res.json();
-      if (data.success && data.data?.memes) {
-        let memes = data.data.memes.map((m: any) => ({
-          ...m,
-          dateAdded: new Date(
-            Date.now() - Math.random() * 10000000000,
-          ).toISOString(),
-        }));
+      const data = await apiFetch<{ memes: MemeTemplate[] }>(
+        "/api/templates",
+        {},
+        { timeoutMs: 10_000 },
+      );
+      if (Array.isArray(data.memes)) {
+        let memes = data.memes;
 
         if (trendsList.length > 0) {
           const boostScore = (name: string) => {
@@ -240,7 +238,11 @@ export default function Home() {
         // Fetch custom templates from Firestore
         if (db && db.app.options.projectId !== "MOCK") {
           try {
-            const snaps = await getDocs(collection(db, "templates"));
+            const snaps = await getDocs(query(
+              collection(db, "templates"),
+              orderBy("createdAt", "desc"),
+              limit(24),
+            ));
             const customTemplates = snaps.docs.map(doc => ({
               id: doc.id,
               ...doc.data(),
@@ -256,9 +258,7 @@ export default function Home() {
 
         cachedMemes = memes;
         setTemplates(memes);
-      } else {
-        throw new Error("Invalid response from Imgflip");
-      }
+      } else throw new Error("Invalid template response");
     } catch (err) {
       console.error("Memes fetch error:", err);
       toast.error("Failed to load trending templates.");
@@ -267,95 +267,63 @@ export default function Home() {
     }
   }, []);
 
-  const searchWeb = async () => {
-    if (!search) return;
-    setSearchingWeb(true);
-    setWebResultFetched(false);
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-      const endpoint =
-        activeTab === "gif"
-          ? apiUrl(`/api/search-google-gifs?q=${encodeURIComponent(search)}`)
-          : apiUrl(`/api/search-memes?q=${encodeURIComponent(search)}`);
-
-      const res = await fetch(endpoint, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) throw new Error("Web search request failed");
-
-      const data = await res.json();
-
-      if (activeTab === "gif") {
-        if (data.success && Array.isArray(data.gifs)) {
-          if (data.gifs.length === 0) {
-            toast.info("No web GIF results found for this search.");
-          } else {
-            setGifs((prev) => {
-              const newGifs = data.gifs.filter(
-                (m: any) => !prev.some((p: any) => p.id === m.id),
-              );
-              return [...newGifs, ...prev]; // put new templates at front
-            });
-            toast.success(`Found ${data.gifs.length} GIFs from the web.`);
-          }
-        } else {
-          throw new Error(data.error || "Web search returned error");
-        }
-      } else {
-        if (data.success && Array.isArray(data.memes)) {
-          if (data.memes.length === 0) {
-            toast.info("No more web templates found for this search.");
-          } else {
-            setTemplates((prev) => {
-              const newTemps = data.memes.filter(
-                (m: any) => !prev.some((p: any) => p.id === m.id),
-              );
-              return [...newTemps, ...prev]; // put new templates at front
-            });
-            toast.success(`Found ${data.memes.length} templates from the web.`);
-          }
-        } else {
-          throw new Error(data.error || "Web search returned error");
-        }
-      }
-    } catch (e: any) {
-      console.error("Web search failed", e);
-      if (e.name === "AbortError") {
-        toast.error("Web search timed out. Please try again.");
-      } else {
-        toast.error("Web search failed.");
-      }
-    } finally {
+  useEffect(() => {
+    if (activeTab !== "still") return;
+    const term = deferredSearch.trim();
+    if (term.length < 2) {
+      setStillSearchResults([]);
+      setStillSearchError(null);
       setSearchingWeb(false);
-      setWebResultFetched(true);
+      return;
     }
-  };
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSearchingWeb(true);
+      try {
+        const data = await apiFetch<{ memes: MemeTemplate[] }>(
+          `/api/search-memes?q=${encodeURIComponent(term)}`,
+          { signal: controller.signal },
+          { timeoutMs: 10_000 },
+        );
+        setStillSearchResults(data.memes || []);
+        setStillSearchError(null);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error("Template search failed", error);
+          setStillSearchResults([]);
+          setStillSearchError(error instanceof Error ? error.message : "More templates are temporarily unavailable.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setSearchingWeb(false);
+      }
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeTab, deferredSearch, searchRetry]);
 
   const generateMemeAI = async () => {
     if (!search) return;
+    if (!user) {
+      toast.error("Sign in to generate an AI image.");
+      return;
+    }
     setGeneratingAI(true);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout for generation
-      const res = await fetch(apiUrl("/api/generate-meme"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: search }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) throw new Error("AI Generator request failed");
-
-      const data = await res.json();
-
-      if (data.success && data.imageUrl) {
+      const data = await apiFetch<{ imageUrl: string; storagePath: string }>(
+        "/api/generate-meme",
+        { method: "POST", body: JSON.stringify({ text: search }) },
+        { user, timeoutMs: 50_000 },
+      );
+      if (data.imageUrl) {
         const aiMeme = {
           id: `ai_${Date.now()}`,
           name: `AI: ${search}`,
           url: data.imageUrl,
+          storagePath: data.storagePath,
           width: 800,
           height: 800,
           box_count: 2,
@@ -363,22 +331,11 @@ export default function Home() {
         };
         setTemplates((prev) => [aiMeme, ...prev]);
         setRecentIds((prev) => [aiMeme.id, ...prev]);
-      } else {
-        toast.error(
-          data.error?.includes("API key")
-            ? "Gemini API key is required. Please add it to your settings."
-            : data.error || "Could not generate image.",
-        );
+        toast.success("AI image added to your templates.");
       }
-    } catch (e: any) {
-      console.error("AI Gen request failed", e);
-      if (e.name === "AbortError") {
-        toast.error("AI Generation timed out. Please try again.");
-      } else {
-        toast.error(
-          "Failed to generate image. Ensure API connections are active.",
-        );
-      }
+    } catch (error) {
+      console.error("AI generation failed", error);
+      toast.error(error instanceof Error ? error.message : "Could not generate an image.");
     } finally {
       setGeneratingAI(false);
     }
@@ -398,30 +355,18 @@ export default function Home() {
     const fetchUserData = async () => {
       if (!db || db.app.options.projectId === "MOCK") {
         setMemesLoading(false);
-        setFavoritesLoading(false);
         return;
       }
       setMemesLoading(true);
-      setFavoritesLoading(true);
       try {
-        const qMemes = query(
-          collection(db, "memes"),
-          where("authorId", "==", user.uid),
-        );
-        const snapsMemes = await getDocs(qMemes);
-        const dataMemes = snapsMemes.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
-        dataMemes.sort(
-          (a: any, b: any) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        );
-        setUserMemes(dataMemes);
+        const memePage = await getUserMemePage(user.uid);
+        setUserMemes(memePage.rows);
 
         const qFavs = query(
           collection(db, "favorites"),
           where("userId", "==", user.uid),
+          orderBy("createdAt", "desc"),
+          limit(100),
         );
         const snapsFavs = await getDocs(qFavs);
         const favsMap: Record<string, any> = {};
@@ -433,7 +378,6 @@ export default function Home() {
         handleFirestoreError(err, OperationType.LIST, "userdata");
       } finally {
         setMemesLoading(false);
-        setFavoritesLoading(false);
       }
     };
     fetchUserData();
@@ -445,14 +389,15 @@ export default function Home() {
       if (!confirm("Are you sure you want to delete this template/meme?"))
         return;
       try {
-        await deleteDoc(doc(db, "memes", id));
+        await apiFetch(`/api/memes/${encodeURIComponent(id)}`, { method: "DELETE" }, { user });
+        if (user) invalidateUserMemeCache(user.uid);
         setUserMemes((prev) => prev.filter((m) => m.id !== id));
         toast.success("Meme deleted successfully.");
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `memes/${id}`);
       }
     },
-    [],
+    [user],
   );
 
   const handleRemoveRecentLocal = useCallback((e: React.MouseEvent, id: string) => {
@@ -509,9 +454,12 @@ export default function Home() {
   );
 
   const sortedAndFilteredTemplates = useMemo(() => {
-    let result = templates.filter((t) =>
-      t.name.toLowerCase().includes(deferredSearch.toLowerCase()),
-    );
+    const term = deferredSearch.trim().toLowerCase();
+    const localMatches = templates.filter((t) => t.name.toLowerCase().includes(term));
+    const seen = new Set(localMatches.map((template) => template.id));
+    let result = term
+      ? [...localMatches, ...stillSearchResults.filter((template) => !seen.has(template.id))]
+      : localMatches;
 
     // Inject favorites that might not be in the current templates pool
     if (sortBy === "favorites") {
@@ -551,8 +499,8 @@ export default function Home() {
           break;
         case "rating":
           result.sort((a, b) => {
-            const scoreA = ((votes[a.id]?.upvoters?.length || 0) - (votes[a.id]?.downvoters?.length || 0));
-            const scoreB = ((votes[b.id]?.upvoters?.length || 0) - (votes[b.id]?.downvoters?.length || 0));
+            const scoreA = (votes[a.id]?.upvotes || 0) - (votes[a.id]?.downvotes || 0);
+            const scoreB = (votes[b.id]?.upvotes || 0) - (votes[b.id]?.downvotes || 0);
             return scoreB - scoreA;
           });
           break;
@@ -563,7 +511,7 @@ export default function Home() {
       }
     }
     return result;
-  }, [templates, deferredSearch, sortBy, recentIds, favorites]);
+  }, [templates, stillSearchResults, deferredSearch, sortBy, recentIds, favorites, votes]);
 
   const sortedAndFilteredGifs = useMemo(() => {
     let result = [...gifs];
@@ -614,8 +562,8 @@ export default function Home() {
           break;
         case "rating":
           result.sort((a, b) => {
-            const scoreA = ((votes[a.id]?.upvoters?.length || 0) - (votes[a.id]?.downvoters?.length || 0));
-            const scoreB = ((votes[b.id]?.upvoters?.length || 0) - (votes[b.id]?.downvoters?.length || 0));
+            const scoreA = (votes[a.id]?.upvotes || 0) - (votes[a.id]?.downvotes || 0);
+            const scoreB = (votes[b.id]?.upvotes || 0) - (votes[b.id]?.downvotes || 0);
             return scoreB - scoreA;
           });
           break;
@@ -625,7 +573,7 @@ export default function Home() {
       }
     }
     return result;
-  }, [gifs, deferredSearch, gifSortBy, recentIds, favorites]);
+  }, [gifs, deferredSearch, gifSortBy, recentIds, favorites, votes]);
 
   const feelLucky = useCallback(() => {
     const list = activeTab === "gif" ? gifs : templates;
@@ -656,6 +604,16 @@ export default function Home() {
             placeholder="Search templates..."
             className="w-full sm:flex-1"
           />
+          {search.trim() && activeTab === "still" && (
+            <button
+              onClick={generateMemeAI}
+              disabled={generatingAI}
+              className="flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-bold transition-all shadow-lg shadow-indigo-500/20 whitespace-nowrap text-sm disabled:opacity-50"
+            >
+              <Sparkles className="w-4 h-4" />
+              {generatingAI ? "Generating…" : user ? "Generate" : "Sign in to generate"}
+            </button>
+          )}
           <button
             onClick={feelLucky}
             className="flex items-center gap-2 px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-full font-bold transition-all shadow-lg whitespace-nowrap text-sm group"
@@ -824,6 +782,20 @@ export default function Home() {
           <h2 className="text-xl font-bold flex items-center gap-2 text-zinc-100 tracking-tight">
             <TrendingUp className="text-indigo-400 w-5 h-5" /> Trending
             Templates
+            {searchingWeb && (
+              <span className="text-xs font-medium normal-case tracking-normal text-zinc-500">
+                Searching more sources…
+              </span>
+            )}
+            {stillSearchError && (
+              <button
+                onClick={() => setSearchRetry((value) => value + 1)}
+                className="text-xs font-medium normal-case tracking-normal text-amber-400 hover:text-amber-300"
+                title={stillSearchError}
+              >
+                More results unavailable · Retry
+              </button>
+            )}
           </h2>
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div className="flex items-center gap-2 bg-zinc-900 border border-white/10 rounded-lg p-1">
@@ -886,27 +858,24 @@ export default function Home() {
               No local templates found for "{search}"
             </h3>
             <p className="text-zinc-400 text-center max-w-md">
-              Search the wider web or create one instantly with AI.
+              We searched the template library and web results automatically. Try another phrase or create a new image.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 mt-6">
-              <button
-                onClick={searchWeb}
-                disabled={searchingWeb || generatingAI}
-                className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold transition-all border border-white/10 disabled:opacity-50"
-              >
-                {searchingWeb ? "Searching Web..." : "Search Web for Templates"}
-              </button>
-              {webResultFetched && (
+              {stillSearchError && (
                 <button
-                  onClick={generateMemeAI}
-                  disabled={generatingAI || searchingWeb}
-                  className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
+                  onClick={() => setSearchRetry((value) => value + 1)}
+                  className="px-6 py-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-xl font-bold border border-amber-500/20"
                 >
-                  <Sparkles className="w-5 h-5" />
-                  {generatingAI ? "Generating..." : "Generate with AI"}
+                  Retry search
                 </button>
               )}
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold transition-all border border-white/10"
+              >
+                Upload an image
+              </button>
             </div>
           </div>
         ) : (
@@ -918,6 +887,7 @@ export default function Home() {
                 isFavorited={!!favorites[t.id]}
                 user={user}
                 votes={votes[t.id]}
+                loadVotes={loadVotes}
                 onVote={handleVote}
                 onFavorite={toggleFavorite}
                 onMarkRecent={markRecent}
@@ -950,29 +920,7 @@ export default function Home() {
             </div>
 
             <button
-              onClick={() => {
-                // To force a refetch of existing query, we can temporarily toggle searching state
-                setLoadingGifs(true);
-                // The useEffect will catch it if we update something, or just refetch directly here
-                const fetchGifs = async () => {
-                  try {
-                    const query = deferredSearch.trim() || "trending meme";
-                    const res = await fetch(
-                      apiUrl(`/api/search-gifs?q=${encodeURIComponent(query)}&force=true`),
-                    );
-                    const data = await res.json();
-                    if (data.success) {
-                      setGifs(data.gifs || []);
-                      setGifPage(1);
-                    }
-                  } catch (e) {
-                    console.error("Failed to refetch gifs", e);
-                  } finally {
-                    setLoadingGifs(false);
-                  }
-                };
-                fetchGifs();
-              }}
+              onClick={refreshGifs}
               className="flex items-center gap-2 px-3 py-2 bg-zinc-800 border border-white/10 rounded-lg hover:bg-zinc-700 text-xs font-bold uppercase tracking-wider transition-colors text-zinc-300"
               title="Refresh Trending GIFs"
             >
@@ -1015,27 +963,16 @@ export default function Home() {
               No local GIFs found for "{search}"
             </h3>
             <p className="text-zinc-400 text-center max-w-md">
-              Search the wider web or create one instantly with AI.
+              GIF search runs automatically. Try another phrase or upload your own animation.
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 mt-6">
               <button
-                onClick={searchWeb}
-                disabled={searchingWeb || generatingAI}
-                className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold transition-all border border-white/10 disabled:opacity-50"
+                onClick={() => setShowUploadModal(true)}
+                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20"
               >
-                {searchingWeb ? "Searching Web..." : "Search Web for GIFs"}
+                Upload a GIF
               </button>
-              {webResultFetched && (
-                <button
-                  onClick={generateMemeAI}
-                  disabled={generatingAI || searchingWeb}
-                  className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
-                >
-                  <Sparkles className="w-5 h-5" />
-                  {generatingAI ? "Generating..." : "Generate with AI"}
-                </button>
-              )}
             </div>
           </div>
         ) : (
@@ -1047,6 +984,7 @@ export default function Home() {
                 isFavorited={!!favorites[t.id]}
                 user={user}
                 votes={votes[t.id]}
+                loadVotes={loadVotes}
                 onVote={handleVote}
                 onFavorite={toggleFavorite}
                 onMarkRecent={markRecent}

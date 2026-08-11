@@ -1,37 +1,50 @@
 # iOS app setup
 
-Memeforge is configured as a Capacitor iOS app. The React/Vite bundle is built into `dist/` and Capacitor packages that bundle into a native iOS shell.
+The Capacitor Xcode project is checked in under `ios/`. The iOS bundle uses `HashRouter`, `apiUrl()`, and `collaborationUrl()` so navigation stays inside the native shell while API and WebSocket traffic targets the deployed backend.
 
 ## Prerequisites
 
-- macOS with Xcode installed
-- Node.js and npm
-- A deployed Memeforge API server for features that call `/api/*` or Socket.IO
+- macOS with a current Xcode release and command-line tools
+- Node.js 22.14 or newer
+- A deployed HTTPS Memeforge backend
+- Apple/Firebase OAuth configuration for bundle ID `com.memeforge.app`
 
-## First-time native project generation
+## Configure a native build
+
+Create `.env.local`:
 
 ```sh
-npm install
-npx cap add ios
+VITE_API_BASE_URL=https://api.memeforge.example.com
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_STORAGE_BUCKET=...
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_APP_ID=...
 ```
 
-## Configure the API server
+On the backend, set `ALLOWED_ORIGINS` for deployed web origins and include `capacitor://localhost` and `memeforge://localhost` in `NATIVE_APP_ORIGINS`. Production CORS rejects every other supplied origin.
 
-Create `.env.local` and set `VITE_API_BASE_URL` to your deployed backend origin:
-
-```sh
-VITE_API_BASE_URL=https://your-memeforge-api.example.com
-```
-
-The iOS build uses this value for API calls and Socket.IO. When it is unset, the web build keeps using same-origin relative API paths.
-
-On the deployed backend, make sure CORS allows the native app origin. The server allows `capacitor://localhost` and `memeforge://localhost` by default; if you change the Capacitor scheme or host, set `NATIVE_APP_ORIGINS` on the backend to the comma-separated native origins you need.
-
-## Build and sync iOS
+## Build and open
 
 ```sh
+npm ci
 npm run ios:sync
 npm run ios:open
 ```
 
-From Xcode, select a team, bundle signing settings, simulator or device, then run/archive the app.
+In Xcode, select the signing team and a simulator/device. Do not run `npx cap add ios`; the platform project is versioned. Commit intentional native project/config changes, but not generated `ios/App/App/public`, Pods, build output, or user-specific Xcode state.
+
+## Release smoke test
+
+Before archiving, verify against the deployed backend:
+
+1. Google/Apple login and logout.
+2. Template and paginated GIF search.
+3. Pro checkout/portal redirects and return links.
+4. AI generation with an active entitlement.
+5. Save, close, and reopen a meme with uploaded media.
+6. Collaboration presence, edit synchronization, and reconnect.
+7. Hash-based editor/profile deep links after relaunch.
+
+CI validates the iOS web build and `npx cap sync ios`; an Xcode archive still requires a macOS signing environment.

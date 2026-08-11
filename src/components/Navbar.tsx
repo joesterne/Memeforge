@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { LogIn, LogOut, Menu, X, Home, Paintbrush, User, Sun, Moon } from "lucide-react";
+import { Gem, LogOut, Menu, X, Home, Paintbrush, User, Sun, Moon } from "lucide-react";
 import { useState } from "react";
 import { AuthModal } from "./AuthModal";
 
@@ -102,6 +102,11 @@ export default function Navbar() {
           <Link to="/editor/new" onClick={closeMenu} className="flex items-center gap-3 px-4 py-3 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl transition-all">
             <Paintbrush className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
             <span className="font-medium px-1">Create Meme</span>
+          </Link>
+
+          <Link to="/pro" onClick={closeMenu} className="flex items-center gap-3 px-4 py-3 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl transition-all">
+            <Gem className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
+            <span className="font-medium px-1">Memeforge Pro</span>
           </Link>
 
           {user && (

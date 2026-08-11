@@ -1,10 +1,20 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleProvider, appleProvider } from '../lib/firebase';
+import { apiFetch } from '../lib/api';
+
+export interface Entitlement {
+  plan: 'free' | 'pro';
+  status: string;
+  currentPeriodEnd: string | null;
+}
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  entitlement: Entitlement | null;
+  entitlementLoading: boolean;
+  refreshEntitlement: () => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signInWithApple: () => Promise<void>;
   logOut: () => Promise<void>;
@@ -13,6 +23,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
+  entitlement: null,
+  entitlementLoading: false,
+  refreshEntitlement: async () => {},
   signInWithGoogle: async () => {},
   signInWithApple: async () => {},
   logOut: async () => {},
@@ -21,6 +34,24 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [entitlement, setEntitlement] = useState<Entitlement | null>(null);
+  const [entitlementLoading, setEntitlementLoading] = useState(false);
+
+  const refreshEntitlement = useCallback(async () => {
+    if (!user) {
+      setEntitlement(null);
+      return;
+    }
+    setEntitlementLoading(true);
+    try {
+      const data = await apiFetch<{ entitlement: Entitlement }>("/api/me/entitlement", {}, { user });
+      setEntitlement(data.entitlement);
+    } catch {
+      setEntitlement(null);
+    } finally {
+      setEntitlementLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!auth) {
@@ -33,6 +64,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    void refreshEntitlement();
+  }, [refreshEntitlement]);
 
   const signInWithGoogle = async () => {
     try {
@@ -59,7 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithGoogle, signInWithApple, logOut }}>
+    <AuthContext.Provider value={{ user, loading, entitlement, entitlementLoading, refreshEntitlement, signInWithGoogle, signInWithApple, logOut }}>
       {children}
     </AuthContext.Provider>
   );

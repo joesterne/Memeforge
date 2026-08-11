@@ -5,7 +5,8 @@ import { db } from "../lib/firebase";
 import { collection, doc, setDoc } from "firebase/firestore";
 import { toast } from "sonner";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
-import imageCompression from "browser-image-compression";
+import { storeUserMedia, validateImageFile } from "../lib/mediaStorage";
+import type { TemplateDocument } from "../types/documents";
 
 interface UploadTemplateModalProps {
   isOpen: boolean;
@@ -29,8 +30,10 @@ export default function UploadTemplateModal({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
     if (selected) {
-      if (selected.size > 5 * 1024 * 1024) {
-        toast.error("File size must be less than 5MB");
+      try {
+        validateImageFile(selected);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Choose a valid image.");
         return;
       }
       setFile(selected);
@@ -58,39 +61,36 @@ export default function UploadTemplateModal({
     setLoading(true);
 
     try {
+      const { default: imageCompression } = await import("browser-image-compression");
       const options = {
-        maxSizeMB: 0.08,
+        maxSizeMB: 0.25,
         maxWidthOrHeight: 800,
         useWebWorker: true,
       };
       const compressedFile = await imageCompression(file, options);
-      
-      const base64data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(compressedFile);
-      });
-      
+
       const { width, height } = await new Promise<{width: number, height: number}>((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve({ width: img.width, height: img.height });
         img.onerror = reject;
-        img.src = base64data;
+        img.src = URL.createObjectURL(compressedFile);
       });
 
-      const newTemplate = {
+      const newDocRef = doc(collection(db, "templates"));
+      const stored = await storeUserMedia(user.uid, "templates", newDocRef.id, compressedFile);
+
+      const newTemplate: TemplateDocument = {
         userId: user.uid,
         userName: user.displayName || "Anonymous",
         name,
-        url: base64data,
+        url: stored.url,
+        storagePath: stored.storagePath,
         width,
         height,
         box_count: 2,
         createdAt: new Date().toISOString(),
       };
       
-      const newDocRef = doc(collection(db, "templates"));
       await setDoc(newDocRef, newTemplate);
       
       toast.success("Template uploaded successfully!");

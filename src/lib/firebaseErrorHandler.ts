@@ -2,56 +2,40 @@ import { auth } from "./firebase";
 import { toast } from "sonner";
 
 export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
+  CREATE = "create",
+  UPDATE = "update",
+  DELETE = "delete",
+  LIST = "list",
+  GET = "get",
+  WRITE = "write",
 }
 
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
+function errorCode(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string") {
+    return error.code.replace(/^firestore\//, "").slice(0, 80);
   }
+  return "unknown";
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  const errInfo: FirestoreErrorInfo = {
-    error: errorMessage,
-    authInfo: {
-      userId: auth?.currentUser?.uid,
-      email: auth?.currentUser?.email,
-      emailVerified: auth?.currentUser?.emailVerified,
-      isAnonymous: auth?.currentUser?.isAnonymous,
-      tenantId: auth?.currentUser?.tenantId,
-      providerInfo: auth?.currentUser?.providerData?.map((provider: any) => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  
-  if (errorMessage.includes('permission-denied') || errorMessage.includes('Missing or insufficient permissions')) {
-    toast.error("Permission denied. You do not have access to this resource.");
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): void {
+  const code = errorCode(error);
+  console.error(JSON.stringify({
+    event: "firestore_client_error",
+    code,
+    operation: operationType,
+    collection: path?.split("/")[0]?.slice(0, 80) || null,
+    actor: auth?.currentUser ? "authenticated" : "anonymous",
+  }));
+
+  if (code.includes("permission-denied")) {
+    toast.error("You do not have access to that item.");
+  } else if (code.includes("unauthenticated")) {
+    toast.error("Sign in again to continue.");
+  } else if (code.includes("unavailable") || code.includes("deadline-exceeded")) {
+    toast.error("The database is temporarily unavailable. Please retry.");
+  } else if (code.includes("resource-exhausted")) {
+    toast.error("That request is too large. Reduce the meme size and retry.");
   } else {
-    toast.error(`Database error during ${operationType}: ${errorMessage}`);
+    toast.error(`Could not ${operationType} the requested data.`);
   }
-  
-  throw new Error(JSON.stringify(errInfo));
 }

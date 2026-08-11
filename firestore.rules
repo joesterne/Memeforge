@@ -1,167 +1,125 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 0. Global Safety Net
-    match /{document=**} {
-      allow read, write: if false;
+    function validId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // 1. Primitive Definitions
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
-    function incoming() { return request.resource.data; }
-    function existing() { return resource.data; }
-    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
-    
-    // 2. Entity Validations
-    function isValidMeme(data) {
-      return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
-             data.keys().size() <= 4 &&
-             data.authorId is string &&
-             data.authorId == request.auth.uid &&
-             data.createdAt is string &&
-             data.createdAt.size() <= 50 &&
-             data.objects is list &&
-             data.objects.size() <= 100 &&
-             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 150000) || data.templateUrl == null : true);
-    }
-    
-    function isValidMemeUpdate(data) {
-      return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
-             data.keys().size() <= 4 &&
-             data.authorId is string &&
-             data.authorId == existing().authorId &&
-             data.createdAt is string &&
-             data.createdAt == existing().createdAt &&
-             data.objects is list &&
-             data.objects.size() <= 100 &&
-             (data.keys().hasAny(['templateUrl']) ? (data.templateUrl is string && data.templateUrl.size() <= 150000) || data.templateUrl == null : true);
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
     }
 
-    function isValidFavorite(data) {
+    function validMediaUrl(value) {
+      return value == null || (value is string && value.size() <= 2000 && value.matches('^https://'));
+    }
+
+    function validStoragePath(value, uid) {
+      return value == null || (value is string && value.size() <= 500 && value.matches('^users/' + uid + '/'));
+    }
+
+    function validMeme(data) {
+      return data.keys().hasAll(['authorId', 'createdAt', 'objects']) &&
+        data.keys().hasOnly(['authorId', 'createdAt', 'objects', 'templateUrl', 'templatePath']) &&
+        data.authorId == request.auth.uid &&
+        data.createdAt is string && data.createdAt.size() <= 50 &&
+        data.objects is list && data.objects.size() <= 250 &&
+        (!data.keys().hasAny(['templateUrl']) || validMediaUrl(data.templateUrl)) &&
+        (!data.keys().hasAny(['templatePath']) || validStoragePath(data.templatePath, request.auth.uid));
+    }
+
+    function validFavorite(data) {
       return data.keys().hasAll(['userId', 'templateId', 'url', 'name', 'createdAt']) &&
-             data.keys().size() == 5 &&
-             data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.templateId is string &&
-             data.templateId.size() <= 128 &&
-             data.url is string &&
-             data.url.size() <= 2000 &&
-             data.name is string &&
-             data.name.size() <= 200 &&
-             data.createdAt is string &&
-             data.createdAt.size() <= 50;
+        data.keys().size() == 5 &&
+        data.userId == request.auth.uid &&
+        data.templateId is string && data.templateId.size() <= 128 &&
+        validMediaUrl(data.url) &&
+        data.name is string && data.name.size() <= 200 &&
+        data.createdAt is string && data.createdAt.size() <= 50;
     }
 
-    function isValidSubmission(data) {
-      return data.keys().hasAll(['userId', 'userName', 'memeUrl', 'createdAt']) &&
-             data.keys().size() == 4 &&
-             data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.userName is string &&
-             data.userName.size() <= 100 &&
-             data.memeUrl is string &&
-             data.memeUrl.size() <= 300000 &&
-             data.createdAt is string &&
-             data.createdAt.size() <= 50;
-    }
-
-    function isValidCustomTemplate(data) {
+    function validTemplate(data) {
       return data.keys().hasAll(['userId', 'userName', 'url', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
-             data.keys().size() == 8 &&
-             data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.userName is string &&
-             data.userName.size() <= 100 &&
-             data.url is string &&
-             data.url.size() <= 300000 &&
-             data.name is string &&
-             data.name.size() <= 100 &&
-             data.width is number &&
-             data.height is number &&
-             data.box_count is number &&
-             data.createdAt is string &&
-             data.createdAt.size() <= 50;
-    }
-    
-    function isValidCustomTemplateUpdate(data) {
-      return data.keys().hasAll(['userId', 'userName', 'url', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
-             data.keys().size() == 8 &&
-             data.userId is string &&
-             data.userId == existing().userId &&
-             data.userName is string &&
-             data.userName.size() <= 100 &&
-             data.url is string &&
-             data.url.size() <= 300000 &&
-             data.name is string &&
-             data.name.size() <= 100 &&
-             data.width is number &&
-             data.height is number &&
-             data.box_count is number &&
-             data.createdAt is string &&
-             data.createdAt == existing().createdAt;
+        data.keys().hasOnly(['userId', 'userName', 'url', 'storagePath', 'name', 'width', 'height', 'box_count', 'createdAt']) &&
+        data.userId == request.auth.uid &&
+        data.userName is string && data.userName.size() <= 100 &&
+        validMediaUrl(data.url) &&
+        (!data.keys().hasAny(['storagePath']) || validStoragePath(data.storagePath, request.auth.uid)) &&
+        data.name is string && data.name.size() <= 100 &&
+        data.width is number && data.width > 0 && data.width <= 10000 &&
+        data.height is number && data.height > 0 && data.height <= 10000 &&
+        data.box_count is number && data.box_count >= 0 && data.box_count <= 20 &&
+        data.createdAt is string && data.createdAt.size() <= 50;
     }
 
-    function isValidTemplateVote(data) {
-      return data.keys().hasAll(['upvoters', 'downvoters']) &&
-             data.keys().size() == 2 &&
-             data.upvoters is list &&
-             data.upvoters.size() <= 10000 &&
-             data.downvoters is list &&
-             data.downvoters.size() <= 10000;
+    function validSubmission(data) {
+      return data.keys().hasAll(['userId', 'userName', 'memeUrl', 'storagePath', 'createdAt']) &&
+        data.keys().size() == 5 &&
+        data.userId == request.auth.uid &&
+        data.userName is string && data.userName.size() <= 100 &&
+        validMediaUrl(data.memeUrl) &&
+        validStoragePath(data.storagePath, request.auth.uid) &&
+        data.createdAt is string && data.createdAt.size() <= 50;
     }
 
-    // 3. Collection Rules
     match /memes/{memeId} {
-      // Anyone can read a meme (for sharing)
-      allow get: if isValidId(memeId);
-      // Only author can list their own
-      allow list: if isSignedIn() && resource.data.authorId == request.auth.uid;
-      
-      allow create: if isSignedIn() && isValidId(memeId) && isValidMeme(incoming());
-      
-      allow update: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid && isValidMemeUpdate(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['objects', 'templateUrl'])
-      );
-      
-      allow delete: if isSignedIn() && isValidId(memeId) && existing().authorId == request.auth.uid;
+      allow get: if signedIn() && validId(memeId) && resource.data.authorId == request.auth.uid;
+      allow list: if signedIn() && resource.data.authorId == request.auth.uid;
+      allow create: if signedIn() && validId(memeId) && validMeme(request.resource.data);
+      allow update: if signedIn() && validId(memeId) && resource.data.authorId == request.auth.uid &&
+        request.resource.data.authorId == resource.data.authorId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        validMeme(request.resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['objects', 'templateUrl', 'templatePath']);
+      allow delete: if signedIn() && validId(memeId) && resource.data.authorId == request.auth.uid;
     }
-    
-    // Favorites rules
+
     match /favorites/{favoriteId} {
-      allow get: if isSignedIn() && isValidId(favoriteId) && resource.data.userId == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(favoriteId) && isValidFavorite(incoming());
-      allow update: if false; // Favorites shouldn't be updated, just created or deleted
-      allow delete: if isSignedIn() && isValidId(favoriteId) && existing().userId == request.auth.uid;
+      allow get, list: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && validId(favoriteId) && validFavorite(request.resource.data);
+      allow update: if false;
+      allow delete: if signedIn() && validId(favoriteId) && resource.data.userId == request.auth.uid;
     }
 
     match /templates/{templateId} {
-      allow get: if isValidId(templateId);
-      allow list: if resource.data.userId is string; // Enforce that we are querying resources with userIds
-      allow create: if isSignedIn() && isValidId(templateId) && isValidCustomTemplate(incoming());
-      allow update: if isSignedIn() && isValidId(templateId) && existing().userId == request.auth.uid && isValidCustomTemplateUpdate(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['userName', 'name', 'url', 'width', 'height', 'box_count'])
-      );
-      allow delete: if isSignedIn() && isValidId(templateId) && existing().userId == request.auth.uid;
-    }
-
-    match /templateVotes/{templateId} {
-      allow get: if isValidId(templateId);
-      allow list: if resource.data.upvoters is list;
-      allow create: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming());
-      allow update: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['upvoters', 'downvoters'])
-      );
-      allow delete: if false;
+      allow read: if validId(templateId);
+      allow create: if signedIn() && validId(templateId) && validTemplate(request.resource.data);
+      allow update: if signedIn() && validId(templateId) && resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        validTemplate(request.resource.data);
+      allow delete: if signedIn() && validId(templateId) && resource.data.userId == request.auth.uid;
     }
 
     match /submissions/{submissionId} {
-      // List/read only allowed for own submissions to prevent data exposure (OWASP Broken Access Control)
-      allow get: if isSignedIn() && isValidId(submissionId) && resource.data.userId == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(submissionId) && isValidSubmission(incoming());
-      allow update: if false; // Submissions are immutable
-      allow delete: if isSignedIn() && isValidId(submissionId) && existing().userId == request.auth.uid;
+      allow get, list: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && validId(submissionId) && validSubmission(request.resource.data);
+      allow update: if false;
+      allow delete: if signedIn() && validId(submissionId) && resource.data.userId == request.auth.uid;
+    }
+
+    // Aggregate vote documents are public to read; only the trusted server can mutate them.
+    match /templateVotes/{templateId} {
+      allow get: if validId(templateId);
+      allow list, create, update, delete: if false;
+      match /users/{uid} {
+        allow get: if signedIn() && request.auth.uid == uid;
+        allow list, create, update, delete: if false;
+      }
+    }
+
+    match /entitlements/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+
+    // Server-only operational collections.
+    match /aiRequests/{document=**} { allow read, write: if false; }
+    match /aiUsage/{document=**} { allow read, write: if false; }
+    match /stripeEvents/{document=**} { allow read, write: if false; }
+    match /collaborationRooms/{document=**} { allow read, write: if false; }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

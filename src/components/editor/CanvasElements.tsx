@@ -3,7 +3,6 @@ import { Image as KonvaImage, Text as KonvaText } from "react-konva";
 import useImage from "use-image";
 import Konva from "konva";
 import { Sparkles } from "lucide-react";
-import type { CanvasObject } from "../../types/canvas";
 
 export const CanvasImage = memo(
   ({ obj, setSelectedId, handleDragEnd, handleTransformEnd, dragBoundFunc }: any) => {
@@ -96,9 +95,11 @@ export const AIMemeChatInput = memo(
   ({
     onGenerateMeme,
     generatingAI,
+    onCancel,
   }: {
     onGenerateMeme: (prompt: string) => void;
     generatingAI: boolean;
+    onCancel: () => void;
   }) => {
     const [aiPrompt, setAiPrompt] = useState("");
     return (
@@ -114,14 +115,14 @@ export const AIMemeChatInput = memo(
             className="w-full bg-zinc-950/50 border border-white/10 rounded-lg p-3 text-sm text-white appearance-none min-h-[80px] resize-none"
           />
           <button
-            onClick={() => onGenerateMeme(aiPrompt)}
-            disabled={generatingAI || !aiPrompt}
+            onClick={() => generatingAI ? onCancel() : onGenerateMeme(aiPrompt)}
+            disabled={!generatingAI && !aiPrompt}
             className="flex font-bold text-xs uppercase tracking-wider items-center justify-center py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all disabled:opacity-50"
           >
             {generatingAI ? (
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Thinking...
+                Cancel generation
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -141,9 +142,11 @@ export const AIPromptInput = memo(
   ({
     onGenerate,
     generatingAI,
+    onCancel,
   }: {
     onGenerate: (prompt: string) => void;
     generatingAI: boolean;
+    onCancel: () => void;
   }) => {
     const [aiPrompt, setAiPrompt] = useState("");
     return (
@@ -157,8 +160,9 @@ export const AIPromptInput = memo(
           className="w-full bg-zinc-950 border border-white/10 rounded-xl p-3 text-sm text-white appearance-none"
         />
         <button
-          onClick={() => onGenerate(aiPrompt)}
-          disabled={generatingAI || !aiPrompt}
+          onClick={() => generatingAI ? onCancel() : onGenerate(aiPrompt)}
+          disabled={!generatingAI && !aiPrompt}
+          title={generatingAI ? "Cancel AI generation" : "Generate an AI background"}
           className="flex items-center justify-center px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all disabled:opacity-50"
         >
           {generatingAI ? (
