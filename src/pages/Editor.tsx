@@ -1127,11 +1127,13 @@ export default function Editor() {
   const exportMemeRef = useRef(exportMeme);
   const handleUndoRef = useRef(handleUndo);
   const handleRedoRef = useRef(handleRedo);
+  const saveToFirebaseRef = useRef(saveToFirebase);
 
   useEffect(() => {
     exportMemeRef.current = exportMeme;
     handleUndoRef.current = handleUndo;
     handleRedoRef.current = handleRedo;
+    saveToFirebaseRef.current = saveToFirebase;
   });
 
   useEffect(() => {
@@ -1156,7 +1158,7 @@ export default function Editor() {
         }
       } else if (cmdOrCtrl && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        setShowExportModal(true);
+        saveToFirebaseRef.current();
       }
     };
 
