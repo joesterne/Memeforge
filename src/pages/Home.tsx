@@ -41,6 +41,7 @@ import { InfiniteScrollLoader } from "../components/InfiniteScrollLoader";
 import { toast } from "sonner";
 import { getRecentCreations, deleteRecentCreation, RecentMeme } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
+import { apiUrl } from "../lib/api";
 
 interface MemeTemplate {
   id: string;
@@ -86,7 +87,7 @@ export default function Home() {
         try {
           const query = deferredSearch.trim() || "trending meme";
           const res = await fetch(
-            `/api/search-gifs?q=${encodeURIComponent(query)}`,
+            apiUrl(`/api/search-gifs?q=${encodeURIComponent(query)}`),
             {
               signal: abortController.signal,
             },
@@ -120,7 +121,7 @@ export default function Home() {
     try {
       const query = deferredSearch.trim() || "trending meme";
       const res = await fetch(
-        `/api/search-gifs?q=${encodeURIComponent(query)}&pos=${encodeURIComponent(nextGifPos)}`
+        apiUrl(`/api/search-gifs?q=${encodeURIComponent(query)}&pos=${encodeURIComponent(nextGifPos)}`)
       );
       const data = await res.json();
       if (data.success) {
@@ -184,7 +185,7 @@ export default function Home() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const trendsRes = await fetch(`/api/trending-searches${force ? "?force=true" : ""}`, {
+        const trendsRes = await fetch(apiUrl(`/api/trending-searches${force ? "?force=true" : ""}`), {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -276,8 +277,8 @@ export default function Home() {
 
       const endpoint =
         activeTab === "gif"
-          ? `/api/search-google-gifs?q=${encodeURIComponent(search)}`
-          : `/api/search-memes?q=${encodeURIComponent(search)}`;
+          ? apiUrl(`/api/search-google-gifs?q=${encodeURIComponent(search)}`)
+          : apiUrl(`/api/search-memes?q=${encodeURIComponent(search)}`);
 
       const res = await fetch(endpoint, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -289,7 +290,7 @@ export default function Home() {
       if (activeTab === "gif") {
         if (data.success && Array.isArray(data.gifs)) {
           if (data.gifs.length === 0) {
-            toast.info("No Google GIF results found for this search.");
+            toast.info("No web GIF results found for this search.");
           } else {
             setGifs((prev) => {
               const newGifs = data.gifs.filter(
@@ -297,7 +298,7 @@ export default function Home() {
               );
               return [...newGifs, ...prev]; // put new templates at front
             });
-            toast.success(`Found ${data.gifs.length} GIFs from Google.`);
+            toast.success(`Found ${data.gifs.length} GIFs from the web.`);
           }
         } else {
           throw new Error(data.error || "Web search returned error");
@@ -338,7 +339,7 @@ export default function Home() {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout for generation
-      const res = await fetch("/api/generate-meme", {
+      const res = await fetch(apiUrl("/api/generate-meme"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: search }),
@@ -957,7 +958,7 @@ export default function Home() {
                   try {
                     const query = deferredSearch.trim() || "trending meme";
                     const res = await fetch(
-                      `/api/search-gifs?q=${encodeURIComponent(query)}&force=true`,
+                      apiUrl(`/api/search-gifs?q=${encodeURIComponent(query)}&force=true`),
                     );
                     const data = await res.json();
                     if (data.success) {
