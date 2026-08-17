@@ -236,27 +236,23 @@ export default function Editor() {
   }, [roomId, user]);
 
   useEffect(() => {
+    let animationFrameId: number;
     let timeoutId: NodeJS.Timeout;
-    let windowTimeoutId: NodeJS.Timeout;
     
-    const updateSize = (rectWidth?: number, rectHeight?: number) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        if (rectWidth !== undefined && rectHeight !== undefined) {
-          setContainerSize({ width: rectWidth, height: rectHeight });
-        } else if (containerRef.current) {
-          setContainerSize({
-            width: containerRef.current.clientWidth,
-            height: containerRef.current.clientHeight,
-          });
-        }
-      }, 100);
-    }
-    
-    const observer = new ResizeObserver((entries) => {
-      if (entries[0] && entries[0].contentRect) {
-        updateSize(entries[0].contentRect.width, entries[0].contentRect.height);
+    const updateSize = () => {
+      if (containerRef.current) {
+        setContainerSize({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight,
+        });
       }
+    };
+    
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = requestAnimationFrame(() => {
+        updateSize();
+      });
     });
 
     if (containerRef.current) {
@@ -264,16 +260,16 @@ export default function Editor() {
     }
     
     const handleWindowResize = () => {
-      clearTimeout(windowTimeoutId);
-      windowTimeoutId = setTimeout(() => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
         updateSize();
-      }, 100);
+      }, 50);
     };
     window.addEventListener("resize", handleWindowResize);
 
     return () => {
+      cancelAnimationFrame(animationFrameId);
       clearTimeout(timeoutId);
-      clearTimeout(windowTimeoutId);
       window.removeEventListener("resize", handleWindowResize);
       observer.disconnect();
     };
@@ -1168,10 +1164,10 @@ export default function Editor() {
 
   return (
     <>
-      <div className="flex flex-col md:flex-row gap-6 md:h-[calc(100vh-120px)] w-full pb-6">
+      <div className="flex flex-col md:flex-row gap-6 md:h-[calc(100vh-120px)] w-full pb-6 min-w-0 min-h-0">
         {/* Editor Main Canvas */}
         <div
-          className="w-full aspect-square md:aspect-auto md:h-full md:flex-[2] bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden"
+          className="w-full aspect-square md:aspect-auto md:h-full md:flex-[2] min-w-0 min-h-0 bg-zinc-900 border border-white/10 rounded-3xl relative overflow-hidden"
           ref={containerRef}
         >
           {/* Zoom Controls */}
