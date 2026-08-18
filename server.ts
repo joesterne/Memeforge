@@ -63,6 +63,8 @@ async function startServer() {
   const rooms: Record<string, { objects: any[]; users: Record<string, any> }> =
     {};
 
+  const clientRateLimits = new Map<string, { count: number, timestamp: number }>();
+
   io.on("connection", (socket) => {
     socket.on("join-room", (roomId: string, user: any) => {
       socket.join(roomId);
@@ -76,6 +78,31 @@ async function startServer() {
     });
 
     socket.on("canvas-update", (roomId: string, data: any) => {
+      // 1. Rate Limiting (max 30 updates per second)
+      const now = Date.now();
+      const limitState = clientRateLimits.get(socket.id) || { count: 0, timestamp: now };
+      
+      if (now - limitState.timestamp > 1000) {
+        limitState.count = 1;
+        limitState.timestamp = now;
+      } else {
+        limitState.count++;
+        if (limitState.count > 30) {
+          // Drop if emitting too fast
+          clientRateLimits.set(socket.id, limitState);
+          return;
+        }
+      }
+      clientRateLimits.set(socket.id, limitState);
+
+      // 2. Validate it's an array and max length
+      if (!Array.isArray(data)) return;
+      if (data.length > 100) return;
+
+      // 3. Limit payload size (500kb max)
+      const payloadSize = Buffer.byteLength(JSON.stringify(data), 'utf8');
+      if (payloadSize > 500 * 1024) return;
+
       if (rooms[roomId]) {
         // simplistic overwrite for now
         rooms[roomId].objects = data;
@@ -84,6 +111,7 @@ async function startServer() {
     });
 
     socket.on("disconnect", () => {
+      clientRateLimits.delete(socket.id);
       for (const roomId in rooms) {
         if (rooms[roomId].users[socket.id]) {
           delete rooms[roomId].users[socket.id];
@@ -345,11 +373,44 @@ app.get("/api/search-gifs", async (req, res) => {
   }
 });
 
+class SimpleCache {
+  private cache = new Map<string, any>();
+  private maxItems: number;
+
+  constructor(maxItems: number) {
+    this.maxItems = maxItems;
+  }
+
+  get(key: string) {
+    return this.cache.get(key);
+  }
+
+  set(key: string, value: any) {
+    if (this.cache.size >= this.maxItems) {
+      // Remove the oldest entry (Map iterates in insertion order)
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.cache.delete(oldestKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+}
+
+const aiChatCache = new SimpleCache(100);
+const aiImageCache = new SimpleCache(100);
+
   app.post("/api/chat-to-meme", aiLimiter, express.json({ limit: '100kb' }), async (req, res) => {
     try {
       const { text } = req.body;
       if (!text || typeof text !== "string") return res.status(400).json({ error: "Text is required" });
       if (text.length > 500) return res.status(400).json({ error: "Text is too long" });
+
+      const normalizedText = text.trim().toLowerCase();
+      const cachedResponse = aiChatCache.get(normalizedText);
+      if (cachedResponse) {
+        return res.json({ success: true, memeDraft: cachedResponse });
+      }
 
       const { GoogleGenAI, Type, ThinkingLevel } = await import("@google/genai");
       const ai = new GoogleGenAI({
@@ -391,6 +452,8 @@ app.get("/api/search-gifs", async (req, res) => {
       const jsonStr = response.text?.trim() || "{}";
       const data = JSON.parse(jsonStr);
 
+      aiChatCache.set(normalizedText, data);
+
       res.json({ success: true, memeDraft: data });
     } catch (error: any) {
       const errMsg = error.message || error.toString() || "Unknown error";
@@ -408,6 +471,12 @@ app.get("/api/search-gifs", async (req, res) => {
       const { text } = req.body;
       if (!text || typeof text !== "string") return res.status(400).json({ error: "Text is required" });
       if (text.length > 500) return res.status(400).json({ error: "Text is too long" });
+
+      const normalizedText = text.trim().toLowerCase();
+      const cachedResponse = aiImageCache.get(normalizedText);
+      if (cachedResponse) {
+        return res.json({ success: true, imageUrl: cachedResponse });
+      }
 
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ 
@@ -439,6 +508,7 @@ app.get("/api/search-gifs", async (req, res) => {
       }
 
       if (imageUrl) {
+        aiImageCache.set(normalizedText, imageUrl);
         res.json({ success: true, imageUrl });
       } else {
         res
@@ -459,8 +529,10 @@ app.get("/api/search-gifs", async (req, res) => {
   app.post("/api/create-checkout-session", apiLimiter, express.json({ limit: '10kb' }), async (req, res) => {
     try {
       const stripe = getStripe();
+      const { userId } = req.body;
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
+        client_reference_id: userId,
         line_items: [
           {
             price_data: {
@@ -485,6 +557,44 @@ app.get("/api/search-gifs", async (req, res) => {
     }
   });
 
+  app.post("/api/webhook/stripe", express.raw({ type: "application/json" }), async (req, res) => {
+    try {
+      const stripe = getStripe();
+      const sig = req.headers["stripe-signature"];
+      if (!sig) return res.status(400).send("No signature");
+
+      const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      let event;
+
+      if (endpointSecret) {
+        event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+      } else {
+        // Fallback for local development if no secret is set
+        event = JSON.parse(req.body.toString());
+      }
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as any;
+        const userId = session.client_reference_id;
+        if (userId) {
+          const { db } = await import("./src/lib/firebase");
+          if (db && db.app.options.projectId !== "MOCK") {
+            const { doc, updateDoc } = await import("firebase/firestore");
+            await updateDoc(doc(db, "users", userId), {
+              isPro: true
+            });
+            console.log(`Successfully upgraded user ${userId} to Pro`);
+          }
+        }
+      }
+
+      res.json({ received: true });
+    } catch (err: any) {
+      console.error("Webhook error:", err.message);
+      res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -493,7 +603,17 @@ app.get("/api/search-gifs", async (req, res) => {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(__dirname));
+    app.use(
+      express.static(__dirname, {
+        setHeaders: (res, path) => {
+          if (path.includes("/assets/")) {
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          } else {
+            res.setHeader("Cache-Control", "public, max-age=3600");
+          }
+        },
+      })
+    );
     app.get("*", (req, res) => {
       res.sendFile(path.join(__dirname, "index.html"));
     });

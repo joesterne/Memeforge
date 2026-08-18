@@ -98,7 +98,7 @@ export default function Editor() {
     template?.is_video || false,
   );
   const [exportFormat, setExportFormat] = useState<
-    "image/png" | "image/jpeg" | "image/gif"
+    "image/png" | "image/jpeg" | "image/gif" | "image/webp"
   >(template?.is_video ? "image/gif" : "image/png");
   const [exportScale, setExportScale] = useState<number>(1);
   const [exportQuality, setExportQuality] = useState<number>(0.9);
@@ -117,13 +117,19 @@ export default function Editor() {
 
   const pushToHistory = useCallback((newObjects: CanvasObject[]) => {
     setHistory((prev) => {
-      const upToCurrent = prev.slice(0, historyStepRef.current + 1);
+      const MAX_HISTORY = 30;
+      let upToCurrent = prev.slice(0, historyStepRef.current + 1);
+      if (upToCurrent.length >= MAX_HISTORY) {
+        upToCurrent = upToCurrent.slice(upToCurrent.length - MAX_HISTORY + 1);
+      }
       return [...upToCurrent, newObjects];
     });
     setHistoryStep((prev) => {
+      const MAX_HISTORY = 30;
       const next = prev + 1;
-      historyStepRef.current = next;
-      return next;
+      const newStep = next >= MAX_HISTORY ? MAX_HISTORY - 1 : next;
+      historyStepRef.current = newStep;
+      return newStep;
     });
   }, []);
 
@@ -649,67 +655,43 @@ export default function Editor() {
         });
         if (bgNode) bgNode.show();
 
-        const overlayImage = await new Promise<HTMLImageElement>(
-          (resolve, reject) => {
-            const img = new Image();
-            img.crossOrigin = "Anonymous";
-            img.onload = () => resolve(img);
-            img.onerror = reject;
-            img.src = overlayDataUrl;
-          },
-        );
+        const worker = new Worker(new URL("../workers/gifEncoder.ts", import.meta.url), { type: "module" });
+        
+        worker.onmessage = (e) => {
+          if (e.data.success) {
+            const url = URL.createObjectURL(e.data.blob);
+            const link = document.createElement("a");
+            link.download = `meme-${roomId}.gif`;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            toast.success("GIF exported!");
+          } else {
+            toast.error(e.data.error || "Failed to generate GIF");
+          }
+          setHasUnsavedChanges(false);
+          setIsExporting(false);
+          worker.terminate();
+        };
 
-        const offscreen = document.createElement("canvas");
-        offscreen.width = targetWidth;
-        offscreen.height = targetHeight;
-        const ctx = offscreen.getContext("2d")!;
+        worker.onerror = (err) => {
+          console.error(err);
+          toast.error("An error occurred during GIF generation.");
+          setHasUnsavedChanges(false);
+          setIsExporting(false);
+          worker.terminate();
+        };
 
-        const newFrames = [];
-        for (const frame of frames) {
-          const frameCanvas = document.createElement("canvas");
-          frameCanvas.width = frame.width;
-          frameCanvas.height = frame.height;
-          frameCanvas
-            .getContext("2d")!
-            .putImageData(
-              new ImageData(
-                new Uint8ClampedArray(frame.data),
-                frame.width,
-                frame.height,
-              ),
-              0,
-              0,
-            );
-
-          ctx.clearRect(0, 0, targetWidth, targetHeight);
-          ctx.drawImage(frameCanvas, 0, 0, targetWidth, targetHeight);
-          ctx.drawImage(overlayImage, 0, 0, targetWidth, targetHeight);
-
-          newFrames.push({
-            data: ctx.getImageData(0, 0, targetWidth, targetHeight).data,
-            delay: frame.delay,
-          });
-        }
-
-        const output = await encode({
-          width: targetWidth,
-          height: targetHeight,
-          frames: newFrames,
+        worker.postMessage({
+          targetWidth,
+          targetHeight,
+          frames,
+          overlayDataUrl,
         });
-
-        const blob = new Blob([output], { type: "image/gif" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.download = `meme-${roomId}.gif`;
-        link.href = url;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        toast.success("GIF exported!");
       } catch (e: any) {
-        toast.error("Failed to export GIF: " + e.message);
-      } finally {
+        toast.error("Failed to start GIF export: " + e.message);
         setHasUnsavedChanges(false);
         setIsExporting(false);
       }
@@ -717,10 +699,11 @@ export default function Editor() {
       const uri = stageRef.current.toDataURL({
         pixelRatio: exportScale / renderScale,
         mimeType: finalFormat,
-        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
+        quality: (finalFormat === "image/jpeg" || finalFormat === "image/webp") ? exportQuality : undefined,
       });
+      const ext = finalFormat.split('/')[1] || "png";
       const link = document.createElement("a");
-      link.download = `meme-${roomId}.${finalFormat === "image/png" ? "png" : "jpg"}`;
+      link.download = `meme-${roomId}.${ext}`;
       link.href = uri;
       document.body.appendChild(link);
       link.click();
@@ -738,10 +721,11 @@ export default function Editor() {
     const uri = node.toDataURL({
       mimeType: exportFormat,
       pixelRatio: exportScale,
-      quality: exportFormat === "image/jpeg" ? exportQuality : undefined,
+      quality: (exportFormat === "image/jpeg" || exportFormat === "image/webp") ? exportQuality : undefined,
     });
+    const ext = exportFormat.split('/')[1] || "png";
     const link = document.createElement("a");
-    link.download = `exported-image-${selectedId}.${exportFormat === "image/png" ? "png" : "jpg"}`;
+    link.download = `exported-image-${selectedId}.${ext}`;
     link.href = uri;
     document.body.appendChild(link);
     link.click();
@@ -758,12 +742,13 @@ export default function Editor() {
       const uri = stageRef.current.toDataURL({
         pixelRatio: exportScale / renderScale,
         mimeType: finalFormat,
-        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
+        quality: (finalFormat === "image/jpeg" || finalFormat === "image/webp") ? exportQuality : undefined,
       });
 
+      const ext = finalFormat.split('/')[1] || "png";
       const response = await fetch(uri);
       const blob = await response.blob();
-      const file = new File([blob], `meme-${roomId}.${finalFormat === "image/png" ? "png" : "jpg"}`, { type: finalFormat });
+      const file = new File([blob], `meme-${roomId}.${ext}`, { type: finalFormat });
 
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
@@ -809,7 +794,7 @@ export default function Editor() {
       uri = stageRef.current.toDataURL({
         pixelRatio: exportScale / renderScale,
         mimeType: finalFormat,
-        quality: finalFormat === "image/jpeg" ? exportQuality : undefined,
+        quality: (finalFormat === "image/jpeg" || finalFormat === "image/webp") ? exportQuality : undefined,
       });
     }
     
@@ -969,7 +954,7 @@ export default function Editor() {
     }
   }, [selectedId, objects]);
 
-  const onTextDblClick = (e: any) => {
+  const onTextDblClick = useCallback((e: any) => {
     const textNode = e.target;
     textNode.hide();
     trRef.current.hide();
@@ -1052,7 +1037,7 @@ export default function Editor() {
     setTimeout(() => {
       window.addEventListener("click", handleOutsideClick);
     }, 0);
-  };
+  }, [objects, emitUpdate]);
 
   const fitScale = Math.max(
     0.1,
@@ -1996,6 +1981,7 @@ export default function Editor() {
                       >
                         <option value="image/png">PNG</option>
                         <option value="image/jpeg">JPG</option>
+                        <option value="image/webp">WebP</option>
                         {isBackgroundAnimatedGif && (
                           <option value="image/gif">GIF (Animated)</option>
                         )}
