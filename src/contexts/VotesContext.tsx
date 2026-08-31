@@ -1,6 +1,13 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { db } from "../lib/firebase";
-import { collection, onSnapshot, doc, setDoc, updateDoc, arrayUnion, arrayRemove, getDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, runTransaction } from "firebase/firestore";
 import { useAuth } from "./AuthContext";
 import { toast } from "sonner";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
@@ -18,6 +25,12 @@ interface VotesContextType {
 
 const VotesContext = createContext<VotesContextType | null>(null);
 
+const haveSameVoters = (left: TemplateVotes, right: TemplateVotes) =>
+  left.upvoters.length === right.upvoters.length &&
+  left.downvoters.length === right.downvoters.length &&
+  left.upvoters.every((id, index) => id === right.upvoters[index]) &&
+  left.downvoters.every((id, index) => id === right.downvoters[index]);
+
 export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
   const [votes, setVotes] = useState<Record<string, TemplateVotes>>({});
   const [loading, setLoading] = useState(true);
@@ -32,11 +45,24 @@ export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
     const unsubscribe = onSnapshot(
       collection(db, "templateVotes"),
       (snapshot) => {
-        const newVotes: Record<string, TemplateVotes> = {};
-        snapshot.docs.forEach((doc) => {
-          newVotes[doc.id] = doc.data() as TemplateVotes;
+        setVotes((previousVotes) => {
+          let changed = snapshot.size !== Object.keys(previousVotes).length;
+          const nextVotes: Record<string, TemplateVotes> = {};
+
+          snapshot.docs.forEach((snapshotDoc) => {
+            const incoming = snapshotDoc.data() as TemplateVotes;
+            const previous = previousVotes[snapshotDoc.id];
+
+            if (previous && haveSameVoters(previous, incoming)) {
+              nextVotes[snapshotDoc.id] = previous;
+            } else {
+              nextVotes[snapshotDoc.id] = incoming;
+              changed = true;
+            }
+          });
+
+          return changed ? nextVotes : previousVotes;
         });
-        setVotes(newVotes);
         setLoading(false);
       },
       (error) => {
@@ -48,7 +74,7 @@ export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
     return () => unsubscribe();
   }, []);
 
-  const handleVote = async (templateId: string, type: 'up' | 'down' | 'clear') => {
+  const handleVote = useCallback(async (templateId: string, type: 'up' | 'down' | 'clear') => {
     if (!user) {
       toast.error("You must be logged in to vote.");
       return;
@@ -58,44 +84,31 @@ export const VotesProvider = ({ children }: { children: React.ReactNode }) => {
 
     try {
       const voteRef = doc(db, "templateVotes", templateId);
-      const voteDoc = await getDoc(voteRef);
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(voteRef);
+        const current = snapshot.exists()
+          ? snapshot.data() as Partial<TemplateVotes>
+          : {};
+        const upvoters = (current.upvoters ?? []).filter((id) => id !== user.uid);
+        const downvoters = (current.downvoters ?? []).filter((id) => id !== user.uid);
 
-      const isUpvoting = type === 'up';
-      const isDownvoting = type === 'down';
+        if (type === "up") upvoters.push(user.uid);
+        if (type === "down") downvoters.push(user.uid);
 
-      if (!voteDoc.exists()) {
-        // Create document if it doesn't exist
-        await setDoc(voteRef, {
-          upvoters: isUpvoting ? [user.uid] : [],
-          downvoters: isDownvoting ? [user.uid] : []
-        });
-      } else {
-        const updates: any = {};
-        
-        // Remove from both lists first to ensure clean state
-        updates.upvoters = arrayRemove(user.uid);
-        updates.downvoters = arrayRemove(user.uid);
-
-        await updateDoc(voteRef, updates);
-
-        // Then add to the target list if we aren't just clearing
-        if (type !== 'clear') {
-           const reUpdate: any = {};
-           if (isUpvoting) {
-             reUpdate.upvoters = arrayUnion(user.uid);
-           } else if (isDownvoting) {
-             reUpdate.downvoters = arrayUnion(user.uid);
-           }
-           await updateDoc(voteRef, reUpdate);
-        }
-      }
+        transaction.set(voteRef, { upvoters, downvoters });
+      });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `templateVotes/${templateId}`);
     }
-  };
+  }, [user]);
+
+  const value = useMemo(
+    () => ({ votes, handleVote, loading }),
+    [votes, handleVote, loading],
+  );
 
   return (
-    <VotesContext.Provider value={{ votes, handleVote, loading }}>
+    <VotesContext.Provider value={value}>
       {children}
     </VotesContext.Provider>
   );
