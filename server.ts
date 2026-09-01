@@ -246,15 +246,14 @@ app.get("/api/search-memes", async (req, res) => {
 
     // Simple regex to extract search results from Imgflip
     const itemRegex =
-      /<img class="base-img" src="(\/\/i\.imgflip\.com\/[^"]+)" alt="([^"]+)"/g;
+      /<a class="s-result clearfix" href="\/i\/[^"]+"><img src="\/\/i\.imgflip\.com\/2\/([^"]+)"\/><div class="s-result-title">([^<]+)<\/div>/g;
     let match;
     let count = 0;
     while ((match = itemRegex.exec(text)) !== null && count < 20) {
-      const url = "https:" + match[1];
-      const name = match[2].replace(/ \w+ meme$/, "").trim(); // Remove " meme" or "blank meme"
+      const url = "https://i.imgflip.com/" + match[1];
+      const name = match[2].replace(/&#039;/g, "'").replace(/&quot;/g, '"').trim();
       // Generate pseudo ID
-      const id =
-        url.split("/").pop()?.split(".")[0] || Math.random().toString();
+      const id = match[1].split(".")[0] || Math.random().toString();
       memes.push({
         id: `search_${id}`,
         name: name,

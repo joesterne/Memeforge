@@ -77,6 +77,7 @@ export default function Home() {
 
   useEffect(() => {
     let abortController: AbortController | null = null;
+    let timeoutId: any;
     if (activeTab === "gif") {
       const fetchGifs = async () => {
         setLoadingGifs(true);
@@ -106,12 +107,42 @@ export default function Home() {
           setLoadingGifs(false);
         }
       };
-      const timeoutId = setTimeout(fetchGifs, 500);
-      return () => {
-        clearTimeout(timeoutId);
-        if (abortController) abortController.abort();
+      timeoutId = setTimeout(fetchGifs, 500);
+    } else if (activeTab === "still" && deferredSearch.trim() !== "") {
+      const fetchMemes = async () => {
+        setSearchingWeb(true);
+        abortController = new AbortController();
+        try {
+          const res = await fetch(
+            `/api/search-memes?q=${encodeURIComponent(deferredSearch.trim())}`,
+            { signal: abortController.signal }
+          );
+          const data = await res.json();
+          if (data.success && Array.isArray(data.memes)) {
+            const queryStr = deferredSearch.trim();
+            const memesWithQuery = data.memes.map((m: any) => ({ ...m, _query: queryStr }));
+            setTemplates((prev) => {
+              const newMemes = memesWithQuery.filter(
+                (m: any) => !prev.some((p: any) => p.id === m.id),
+              );
+              return [...newMemes, ...prev]; // put new templates at front
+            });
+          }
+        } catch (e: any) {
+          if (e.name !== "AbortError") {
+            console.error("Failed to fetch Memes:", e);
+          }
+        } finally {
+          setSearchingWeb(false);
+        }
       };
+      timeoutId = setTimeout(fetchMemes, 500);
     }
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (abortController) abortController.abort();
+    };
   }, [activeTab, deferredSearch]);
 
   const fetchMoreGifs = useCallback(async () => {
@@ -307,8 +338,10 @@ export default function Home() {
           if (data.memes.length === 0) {
             toast.info("No more web templates found for this search.");
           } else {
+            const queryStr = search.trim();
+            const memesWithQuery = data.memes.map((m: any) => ({ ...m, _query: queryStr }));
             setTemplates((prev) => {
-              const newTemps = data.memes.filter(
+              const newTemps = memesWithQuery.filter(
                 (m: any) => !prev.some((p: any) => p.id === m.id),
               );
               return [...newTemps, ...prev]; // put new templates at front
@@ -509,7 +542,8 @@ export default function Home() {
 
   const sortedAndFilteredTemplates = useMemo(() => {
     let result = templates.filter((t) =>
-      t.name.toLowerCase().includes(deferredSearch.toLowerCase()),
+      t.name.toLowerCase().includes(deferredSearch.toLowerCase()) || 
+      (t as any)._query === deferredSearch.trim()
     );
 
     // Inject favorites that might not be in the current templates pool
@@ -640,8 +674,8 @@ export default function Home() {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="text-center space-y-4 max-w-2xl mx-auto py-8">
-        <h1 className="text-4xl sm:text-5xl font-black tracking-tighter text-white">
-          Create Epic Memes <span className="text-indigo-400">Together</span>
+        <h1 className="text-4xl sm:text-5xl font-black tracking-tighter text-zinc-900 dark:text-white">
+          Create Epic Memes <span className="text-indigo-600 dark:text-indigo-400">Together</span>
         </h1>
         <p className="text-lg text-zinc-600 dark:text-zinc-400">
           Start from a trending template, search for the perfect reaction, or
@@ -869,7 +903,7 @@ export default function Home() {
       )}
 
       {activeTab === "still" &&
-        (loading ? (
+        ((loading || (searchingWeb && sortedAndFilteredTemplates.length === 0)) ? (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
             {[...Array(10)].map((_, i) => (
               <div
@@ -878,7 +912,7 @@ export default function Home() {
               ></div>
             ))}
           </div>
-        ) : sortedAndFilteredTemplates.length === 0 ? (
+        ) : sortedAndFilteredTemplates.length === 0 && !searchingWeb ? (
           <div className="flex flex-col items-center justify-center p-12 bg-zinc-900 border border-white/10 rounded-3xl gap-4 col-span-full mt-4">
             <Search className="w-12 h-12 text-zinc-500 mb-4" />
             <h3 className="text-xl font-bold text-white text-center">
@@ -998,7 +1032,7 @@ export default function Home() {
       )}
 
       {activeTab === "gif" &&
-        (loadingGifs && gifs.length === 0 ? (
+        ((loadingGifs && gifs.length === 0) || (searchingWeb && sortedAndFilteredGifs.length === 0) ? (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 mt-6">
             {[...Array(10)].map((_, i) => (
               <div
@@ -1007,7 +1041,7 @@ export default function Home() {
               ></div>
             ))}
           </div>
-        ) : sortedAndFilteredGifs.length === 0 && !loadingGifs ? (
+        ) : sortedAndFilteredGifs.length === 0 && !loadingGifs && !searchingWeb ? (
           <div className="flex flex-col items-center justify-center p-12 bg-zinc-900 border border-white/10 rounded-3xl gap-4 col-span-full mt-6">
             <Search className="w-12 h-12 text-zinc-500 mb-4" />
             <h3 className="text-xl font-bold text-white text-center">
