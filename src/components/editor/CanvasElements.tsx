@@ -7,7 +7,13 @@ import type { CanvasObject } from "../../types/canvas";
 
 export const CanvasImage = memo(
   ({ obj, setSelectedId, handleDragEnd, handleTransformEnd, dragBoundFunc }: any) => {
-    const [img] = useImage(obj.url, "anonymous");
+    const getProxiedUrl = (url: string | undefined | null) => {
+      if (!url) return "";
+      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("/")) return url;
+      return `/api/proxy-image?url=${encodeURIComponent(url)}`;
+    };
+
+    const [img] = useImage(getProxiedUrl(obj.url), "anonymous");
     const imageRef = useRef<any>(null);
     const handleSelect = useCallback(
       () => setSelectedId(obj.id),

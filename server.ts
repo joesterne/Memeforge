@@ -130,6 +130,25 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  app.get("/api/proxy-image", async (req, res) => {
+    try {
+      const imageUrl = req.query.url as string;
+      if (!imageUrl) return res.status(400).send("No url provided");
+      
+      const response = await fetch(imageUrl);
+      if (!response.ok) throw new Error("Failed to fetch image");
+      
+      const contentType = response.headers.get("content-type");
+      if (contentType) res.setHeader("Content-Type", contentType);
+      
+      const arrayBuffer = await response.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+    } catch (error) {
+      console.error("Proxy error:", error);
+      res.status(500).send("Error proxying image");
+    }
+  });
+
   // Removed test-gemini route
 
 let cachedTrends: { data: string[]; timestamp: number } | null = null;

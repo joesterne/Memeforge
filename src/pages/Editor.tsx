@@ -55,6 +55,103 @@ import { CloseModal } from "../components/editor/CloseModal";
 import { saveRecentCreation } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
 
+const DraggableTextItem = memo(
+  ({
+    obj,
+    renderScale,
+    selectedId,
+    editingTextId,
+    setSelectedId,
+    setEditingTextId,
+    emitUpdate,
+    objectsRef,
+  }: any) => {
+    const nodeRef = useRef<HTMLDivElement>(null);
+
+    return (
+      <Draggable
+        nodeRef={nodeRef}
+        key={obj.id}
+        position={{ x: obj.x, y: obj.y }}
+        scale={renderScale}
+        onStart={() => setSelectedId(obj.id)}
+        onDrag={(e, data) => {
+          const newObjs = objectsRef.current.map((o: any) =>
+            o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
+          );
+          emitUpdate(newObjs, true, false); // skipHistory = true
+        }}
+        onStop={(e, data) => {
+          const newObjs = objectsRef.current.map((o: any) =>
+            o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
+          );
+          emitUpdate(newObjs, false, false); // skipHistory = false
+        }}
+      >
+        <div ref={nodeRef} className="absolute pointer-events-auto cursor-move">
+          <div
+            className={
+              selectedId === obj.id ? "ring-2 ring-indigo-500 rounded" : ""
+            }
+            style={{
+              fontFamily: obj.fontFamily,
+              fontSize: `${obj.fontSize}px`,
+              color: obj.fill,
+              WebkitTextStroke: obj.stroke
+                ? `${obj.strokeWidth}px ${obj.stroke}`
+                : undefined,
+              lineHeight: 1,
+              whiteSpace: "pre-wrap",
+              transform: `rotate(${obj.rotation || 0}deg)`,
+              transformOrigin: "top left",
+            }}
+            onDoubleClick={() => setEditingTextId(obj.id)}
+          >
+            {editingTextId === obj.id ? (
+              <textarea
+                autoFocus
+                defaultValue={obj.text}
+                onBlur={(e) => {
+                  setEditingTextId(null);
+                  const newObjs = objectsRef.current.map((o: any) =>
+                    o.id === obj.id ? { ...o, text: e.target.value } : o
+                  );
+                  emitUpdate(newObjs);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.currentTarget.blur();
+                  }
+                }}
+                className="bg-transparent border-none outline-none resize-none overflow-hidden m-0 p-0"
+                style={{
+                  fontFamily: "inherit",
+                  fontSize: "inherit",
+                  color: "inherit",
+                  lineHeight: "inherit",
+                  width: obj.text
+                    ? obj.text.length * obj.fontSize * 0.6 + "px"
+                    : "200px",
+                }}
+                onInput={(e) => {
+                  e.currentTarget.style.width = "0px";
+                  e.currentTarget.style.width =
+                    e.currentTarget.scrollWidth + 20 + "px";
+                  e.currentTarget.style.height = "0px";
+                  e.currentTarget.style.height =
+                    e.currentTarget.scrollHeight + 10 + "px";
+                }}
+              />
+            ) : (
+              obj.text
+            )}
+          </div>
+        </div>
+      </Draggable>
+    );
+  }
+);
+
 export default function Editor() {
   const { id } = useParams();
   const location = useLocation();
@@ -85,7 +182,13 @@ export default function Editor() {
 
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
   const [roomId] = useState(() => (id && id !== "new" && !id.startsWith("template_")) ? id : uuidv4());
-  const [bgImage] = useImage(template?.url || "", "anonymous");
+  const getProxiedUrl = (url: string | undefined | null) => {
+    if (!url) return "";
+    if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("/")) return url;
+    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
+  };
+
+  const [bgImage] = useImage(getProxiedUrl(template?.url), "anonymous");
   const [isRoom, setIsRoom] = useState(!id?.startsWith("template_"));
   const [saving, setSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -166,7 +269,7 @@ export default function Editor() {
   });
   const [logicalSize, setLogicalSize] = useState({ width: 800, height: 800 });
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
-  const [upImage] = useImage(uploadedImageUrl || "", "anonymous");
+  const [upImage] = useImage(getProxiedUrl(uploadedImageUrl), "anonymous");
 
   useEffect(() => {
     if (bgImage) {
@@ -1429,73 +1532,17 @@ export default function Editor() {
               {objects.map((obj) => {
                 if (obj.type === "text") {
                   return (
-                    <Draggable
+                    <DraggableTextItem
                       key={obj.id}
-                      position={{ x: obj.x, y: obj.y }}
-                      scale={renderScale}
-                      onStart={() => setSelectedId(obj.id)}
-                      onStop={(e, data) => {
-                        const newObjs = objectsRef.current.map((o) =>
-                          o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
-                        );
-                        emitUpdate(newObjs);
-                      }}
-                    >
-                      <div
-                        className={`absolute pointer-events-auto cursor-move ${
-                          selectedId === obj.id ? "ring-2 ring-indigo-500 rounded" : ""
-                        }`}
-                        style={{
-                          fontFamily: obj.fontFamily,
-                          fontSize: `${obj.fontSize}px`,
-                          color: obj.fill,
-                          WebkitTextStroke: obj.stroke
-                            ? `${obj.strokeWidth}px ${obj.stroke}`
-                            : undefined,
-                          lineHeight: 1,
-                          whiteSpace: "pre-wrap",
-                          transform: `rotate(${obj.rotation || 0}deg)`,
-                        }}
-                        onDoubleClick={() => setEditingTextId(obj.id)}
-                      >
-                        {editingTextId === obj.id ? (
-                          <textarea
-                            autoFocus
-                            defaultValue={obj.text}
-                            onBlur={(e) => {
-                              setEditingTextId(null);
-                              const newObjs = objectsRef.current.map((o) =>
-                                o.id === obj.id
-                                  ? { ...o, text: e.target.value }
-                                  : o
-                              );
-                              emitUpdate(newObjs);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.currentTarget.blur();
-                              }
-                            }}
-                            className="bg-transparent border-none outline-none resize-none overflow-hidden m-0 p-0"
-                            style={{
-                              fontFamily: "inherit",
-                              fontSize: "inherit",
-                              color: "inherit",
-                              lineHeight: "inherit",
-                              width: obj.text ? (obj.text.length * obj.fontSize * 0.6) + 'px' : '200px',
-                            }}
-                            onInput={(e) => {
-                              e.currentTarget.style.width = '0px';
-                              e.currentTarget.style.width = (e.currentTarget.scrollWidth + 20) + 'px';
-                              e.currentTarget.style.height = '0px';
-                              e.currentTarget.style.height = (e.currentTarget.scrollHeight + 10) + 'px';
-                            }}
-                          />
-                        ) : (
-                          obj.text
-                        )}
-                      </div>
-                    </Draggable>
+                      obj={obj}
+                      renderScale={renderScale}
+                      selectedId={selectedId}
+                      editingTextId={editingTextId}
+                      setSelectedId={setSelectedId}
+                      setEditingTextId={setEditingTextId}
+                      emitUpdate={emitUpdate}
+                      objectsRef={objectsRef}
+                    />
                   );
                 }
                 return null;
