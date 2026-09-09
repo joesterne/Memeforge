@@ -34,7 +34,8 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
-  CloudUpload
+  CloudUpload,
+  RotateCw
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import Draggable from "react-draggable";
@@ -68,6 +69,37 @@ const DraggableTextItem = memo(
   }: any) => {
     const nodeRef = useRef<HTMLDivElement>(null);
 
+    const handleRotateStart = (e: React.PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      const node = nodeRef.current;
+      if (!node) return;
+      
+      const rect = node.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
+        let degrees = angle * (180 / Math.PI) + 90;
+        
+        const newObjs = objectsRef.current.map((o: any) =>
+          o.id === obj.id ? { ...o, rotation: degrees } : o
+        );
+        emitUpdate(newObjs, true, false);
+      };
+
+      const onPointerUp = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        emitUpdate([...objectsRef.current], false, false);
+      };
+
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    };
+
     return (
       <Draggable
         nodeRef={nodeRef}
@@ -91,7 +123,7 @@ const DraggableTextItem = memo(
         <div ref={nodeRef} className="absolute pointer-events-auto cursor-move">
           <div
             className={
-              selectedId === obj.id ? "ring-2 ring-indigo-500 rounded" : ""
+              selectedId === obj.id ? "ring-2 ring-indigo-500 rounded relative" : "relative"
             }
             style={{
               fontFamily: obj.fontFamily,
@@ -100,6 +132,9 @@ const DraggableTextItem = memo(
               WebkitTextStroke: obj.stroke
                 ? `${obj.strokeWidth}px ${obj.stroke}`
                 : undefined,
+              textShadow: obj.shadowEnabled
+                ? `2px 2px 10px ${obj.shadowColor || "rgba(0,0,0,0.8)"}`
+                : undefined,
               lineHeight: 1,
               whiteSpace: "pre-wrap",
               transform: `rotate(${obj.rotation || 0}deg)`,
@@ -107,6 +142,14 @@ const DraggableTextItem = memo(
             }}
             onDoubleClick={() => setEditingTextId(obj.id)}
           >
+            {selectedId === obj.id && (
+              <div
+                className="absolute -top-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-white rounded-full border-2 border-indigo-500 shadow-md cursor-grab active:cursor-grabbing flex items-center justify-center pointer-events-auto"
+                onPointerDown={handleRotateStart}
+              >
+                <RotateCw className="w-3 h-3 text-indigo-500" />
+              </div>
+            )}
             {editingTextId === obj.id ? (
               <textarea
                 autoFocus
@@ -1976,6 +2019,55 @@ export default function Editor() {
                       className="w-full accent-indigo-500"
                     />
                   </div>
+                  <div className="flex items-center gap-3 bg-zinc-950/50 border border-white/5 rounded-lg p-3">
+                    <input
+                      type="checkbox"
+                      id="text-shadow-toggle"
+                      checked={
+                        objects.find((o) => o.id === selectedId)?.shadowEnabled ?? false
+                      }
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        const newObjs = objects.map((o) =>
+                          o.id === selectedId ? { ...o, shadowEnabled: enabled } : o
+                        );
+                        emitUpdate(newObjs);
+                      }}
+                      className="w-4 h-4 rounded border-white/20 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-950 cursor-pointer"
+                    />
+                    <label htmlFor="text-shadow-toggle" className="text-xs text-zinc-300 font-bold uppercase tracking-wider cursor-pointer">
+                      Enable Text Shadow
+                    </label>
+                  </div>
+                  {objects.find((o) => o.id === selectedId)?.shadowEnabled && (
+                    <div>
+                      <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
+                        Shadow Color
+                      </label>
+                      <div className="flex items-center gap-2 bg-zinc-950 border border-white/10 rounded-lg p-1">
+                        <input
+                          type="color"
+                          value={
+                            objects.find((o) => o.id === selectedId)?.shadowColor ||
+                            "#000000"
+                          }
+                          onChange={(e) => {
+                            const newObjs = objects.map((o) =>
+                              o.id === selectedId
+                                ? { ...o, shadowColor: e.target.value }
+                                : o,
+                            );
+                            emitUpdate(newObjs, true, true);
+                          }}
+                          onBlur={() => emitUpdate(objects)}
+                          className="w-6 h-6 rounded shrink-0 cursor-pointer p-0 border-0 bg-transparent"
+                        />
+                        <span className="text-xs text-zinc-400 font-mono uppercase truncate">
+                          {objects.find((o) => o.id === selectedId)?.shadowColor || "#000000"}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

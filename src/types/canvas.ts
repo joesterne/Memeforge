@@ -16,4 +16,6 @@ export interface CanvasObject {
   rotation?: number;
   dash?: number[];
   filter?: "none" | "grayscale" | "sepia" | "invert";
+  shadowEnabled?: boolean;
+  shadowColor?: string;
 }
