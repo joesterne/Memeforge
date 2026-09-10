@@ -18,6 +18,11 @@ import {
   Filter,
   Sparkles,
   Dices,
+  BookMarked,
+  Search,
+  Download,
+  Trash2,
+  CheckCircle2
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -38,9 +43,12 @@ import SearchBar from "../components/SearchBar";
 import TemplateCard from "../components/TemplateCard";
 import UploadTemplateModal from "../components/UploadTemplateModal";
 import { InfiniteScrollLoader } from "../components/InfiniteScrollLoader";
+import { localdb } from "../lib/localdb";
+import { useLiveQuery } from "dexie-react-hooks";
 import { toast } from "sonner";
 import { getRecentCreations, deleteRecentCreation, RecentMeme } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
+import { BOOKMARKS } from "../data/bookmarks";
 
 interface MemeTemplate {
   id: string;
@@ -66,7 +74,10 @@ export default function Home() {
   const [templates, setTemplates] = useState<MemeTemplate[]>(cachedMemes || []);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  const [activeTab, setActiveTab] = useState<"still" | "gif">("still");
+  const [activeTab, setActiveTab] = useState<"still" | "gif" | "library">("still");
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  const savedGifs = useLiveQuery(() => localdb.savedGifs.orderBy('importedAt').reverse().toArray());
   const [loading, setLoading] = useState(!cachedMemes);
   const [searchingWeb, setSearchingWeb] = useState(false);
   const [gifs, setGifs] = useState<MemeTemplate[]>([]);
@@ -169,6 +180,48 @@ export default function Home() {
       setLoadingGifs(false);
     }
   }, [nextGifPos, loadingGifs, deferredSearch]);
+  const importBookmarks = async () => {
+    if (isImporting) return;
+    setIsImporting(true);
+    setImportProgress({ current: 0, total: BOOKMARKS.length });
+
+    let current = 0;
+    for (const bookmark of BOOKMARKS) {
+      try {
+        const res = await fetch(`/api/search-gifs?q=${encodeURIComponent(bookmark)}`);
+        const data = await res.json();
+        if (data.success && data.gifs && data.gifs.length > 0) {
+          const firstGif = data.gifs[0];
+          
+          // Check if it already exists in DB
+          const existing = await localdb.savedGifs.where('query').equals(bookmark).first();
+          if (!existing) {
+            await localdb.savedGifs.add({
+              tenorId: firstGif.id,
+              url: firstGif.url,
+              previewUrl: firstGif.url,
+              title: firstGif.name || bookmark,
+              query: bookmark,
+              importedAt: Date.now()
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to import bookmark:", bookmark, e);
+      }
+      current++;
+      setImportProgress({ current, total: BOOKMARKS.length });
+    }
+    
+    setIsImporting(false);
+    toast.success("Import completed!");
+  };
+
+  const clearLibrary = async () => {
+    await localdb.savedGifs.clear();
+    toast.success("Library cleared");
+  };
+
   const [webResultFetched, setWebResultFetched] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>("trending");
   const [gifSortBy, setGifSortBy] = useState<SortOption>("trending");
@@ -850,6 +903,12 @@ export default function Home() {
         >
           Animated GIFs
         </button>
+        <button
+          onClick={() => setActiveTab("library")}
+          className={`py-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-all ${activeTab === "library" ? "border-indigo-500 text-indigo-400" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
+        >
+          Library
+        </button>
       </div>
 
       {activeTab === "still" && (
@@ -1094,6 +1153,118 @@ export default function Home() {
           loading={loadingGifs}
           onLoadMore={fetchMoreGifs}
         />
+      )}
+
+      {activeTab === "library" && (
+        <div className="pt-4 space-y-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <h2 className="text-xl font-bold flex items-center gap-2 text-zinc-100 tracking-tight">
+              <BookMarked className="text-indigo-400 w-5 h-5" /> Local GIF Library
+            </h2>
+            <div className="flex items-center gap-3">
+              {isImporting ? (
+                <div className="flex items-center gap-3 bg-zinc-800 px-4 py-2 rounded-lg border border-white/10">
+                  <Loader2 className="w-4 h-4 text-indigo-400 animate-spin" />
+                  <span className="text-sm font-bold text-zinc-300">
+                    Importing {importProgress.current} / {importProgress.total}
+                  </span>
+                  <div className="w-24 h-1.5 bg-zinc-700 rounded-full overflow-hidden ml-2">
+                    <div 
+                      className="h-full bg-indigo-500 transition-all duration-300" 
+                      style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={importBookmarks}
+                  className="flex items-center gap-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 hover:text-indigo-300 px-4 py-2 rounded-lg text-sm font-bold uppercase tracking-wider transition-all border border-indigo-500/30"
+                >
+                  <Download className="w-4 h-4" /> Import {BOOKMARKS.length} Bookmarks
+                </button>
+              )}
+              
+              {savedGifs && savedGifs.length > 0 && !isImporting && (
+                <button
+                  onClick={clearLibrary}
+                  className="flex items-center gap-2 bg-red-600/20 hover:bg-red-600/40 text-red-400 hover:text-red-300 px-4 py-2 rounded-lg text-sm font-bold uppercase tracking-wider transition-all border border-red-500/30"
+                >
+                  <Trash2 className="w-4 h-4" /> Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {savedGifs && savedGifs.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              {savedGifs.map((gif) => (
+                <div key={gif.id} className="relative group bg-zinc-900 rounded-xl overflow-hidden border border-white/10">
+                  <img
+                    src={gif.url || gif.previewUrl}
+                    alt={gif.title || gif.query}
+                    className="w-full h-32 object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
+                    <p className="text-xs text-white font-medium line-clamp-2 mb-2">{gif.query}</p>
+                    <Link
+                      to={`/editor/gif?id=${gif.tenorId}&url=${encodeURIComponent(gif.url)}&title=${encodeURIComponent(gif.title)}`}
+                      className="bg-indigo-500 text-white text-xs font-bold uppercase tracking-wider py-1.5 rounded-lg text-center hover:bg-indigo-600 transition-colors"
+                    >
+                      Use GIF
+                    </Link>
+                  </div>
+                  <div className="absolute top-2 left-2 bg-black/60 p-1 rounded-md">
+                    <CheckCircle2 className="w-3 h-3 text-indigo-400" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12 bg-zinc-900/50 rounded-2xl border border-white/5 border-dashed">
+              <Download className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
+              <h3 className="text-lg font-bold text-zinc-300 mb-2">Library is Empty</h3>
+              <p className="text-zinc-500 max-w-sm mx-auto mb-6">
+                Click the import button above to fetch and save GIFs for all your bookmarks locally.
+              </p>
+            </div>
+          )}
+
+          {(() => {
+            const importedQueries = new Set(savedGifs?.map(g => g.query) || []);
+            const pendingBookmarks = BOOKMARKS.filter(b => !importedQueries.has(b));
+            
+            if (pendingBookmarks.length === 0) return null;
+            
+            return (
+              <div className="pt-8 border-t border-white/10">
+                <h3 className="text-sm font-bold text-zinc-500 uppercase tracking-wider mb-4">
+                  Pending Bookmarks ({pendingBookmarks.length})
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                  {pendingBookmarks.map((bookmark, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setSearch(bookmark);
+                        setActiveTab("gif");
+                      }}
+                      className="bg-zinc-800/50 hover:bg-zinc-700/80 p-4 rounded-xl text-left border border-white/5 hover:border-indigo-500/50 transition-all group flex items-start gap-3"
+                    >
+                      <div className="bg-indigo-500/10 p-2 rounded-lg text-indigo-400 group-hover:scale-110 group-hover:bg-indigo-500 group-hover:text-white transition-all">
+                        <Search className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-zinc-300 group-hover:text-white line-clamp-2 leading-relaxed">
+                          {bookmark}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
       )}
       {showUploadModal && (
         <UploadTemplateModal

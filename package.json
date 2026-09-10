@@ -18,6 +18,8 @@
     "@vitejs/plugin-react": "^5.0.4",
     "browser-image-compression": "^2.0.2",
     "compression": "^1.8.1",
+    "dexie": "^4.4.5",
+    "dexie-react-hooks": "^4.4.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.2",

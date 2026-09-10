@@ -77,12 +77,16 @@ const DraggableTextItem = memo(
       if (!node) return;
       
       const rect = node.getBoundingClientRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
+      const centerX = rect.left;
+      const centerY = rect.top;
+
+      const initialAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+      const initialRotation = obj.rotation || 0;
 
       const onPointerMove = (moveEvent: PointerEvent) => {
         const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
-        let degrees = angle * (180 / Math.PI) + 90;
+        const angleDelta = (angle - initialAngle) * (180 / Math.PI);
+        let degrees = initialRotation + angleDelta;
         
         const newObjs = objectsRef.current.map((o: any) =>
           o.id === obj.id ? { ...o, rotation: degrees } : o

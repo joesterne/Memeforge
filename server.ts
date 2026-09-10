@@ -350,44 +350,71 @@ app.get("/api/search-google-gifs", async (req, res) => {
 app.get("/api/search-gifs", async (req, res) => {
   try {
     const q = req.query.q as string;
-    const pos = req.query.pos as string;
+    let offset = parseInt(req.query.pos as string) || 0;
     const force = req.query.force === "true";
-    if (!q) return res.json({ success: true, gifs: [], next: "" });
+    if (!q) return res.json({ success: true, gifs: [], next: "0" });
 
-    const cacheKey = `${q}_${pos || ""}`;
+    const cacheKey = `${q}_${offset}`;
     if (!force && tenorGifCache.has(cacheKey) && Date.now() - tenorGifCache.get(cacheKey)!.timestamp < CACHE_DURATION_MS) {
       const cached = tenorGifCache.get(cacheKey)!.data;
       return res.json({ success: true, ...cached, cached: true });
     }
 
-    const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
-    const endpoint = force ? "random" : "search";
-    const response = await fetch(
-      `https://g.tenor.com/v1/${endpoint}?q=${encodeURIComponent(q)}&key=LIVDSRZULELA&limit=20${posParam}`,
-    );
-    if (!response.ok) {
-      throw new Error("Failed to search Tenor");
+    // Support GIPHY
+    if (!process.env.GIPHY_API_KEY && !process.env.TENOR_API_KEY) {
+      return res.status(500).json({ success: false, error: "Please configure GIPHY_API_KEY or TENOR_API_KEY in secrets." });
     }
 
-    const data = await response.json();
-    const gifs = (data.results || []).map((item: any) => ({
-      id: `gif_${item.id}`,
-      name: item.content_description || "Animated GIF",
-      url: item.media[0].gif.url,
-      width: item.media[0].gif.dims[0],
-      height: item.media[0].gif.dims[1],
-      box_count: 1, // gifs usually have 1 text box if any
-      dateAdded: new Date(
-        Date.now() - Math.random() * 10000000000,
-      ).toISOString(),
-      is_video: true,
-    }));
+    let gifs = [];
+    let next = (offset + 20).toString();
 
-    tenorGifCache.set(cacheKey, { data: { gifs, next: data.next }, timestamp: Date.now() });
-    res.json({ success: true, gifs, next: data.next });
+    if (process.env.GIPHY_API_KEY) {
+      const endpoint = force ? "trending" : "search";
+      const qParam = force ? "" : `&q=${encodeURIComponent(q)}`;
+      const response = await fetch(
+        `https://api.giphy.com/v1/gifs/${endpoint}?api_key=${process.env.GIPHY_API_KEY}${qParam}&limit=20&offset=${offset}`
+      );
+      if (!response.ok) throw new Error("Failed to search Giphy");
+      const data = await response.json();
+      gifs = (data.data || []).map((item: any) => ({
+        id: `gif_${item.id}`,
+        name: item.title || "Animated GIF",
+        url: item.images.original.url,
+        previewUrl: item.images.fixed_height.url,
+        width: parseInt(item.images.original.width) || 400,
+        height: parseInt(item.images.original.height) || 400,
+        box_count: 1,
+        dateAdded: new Date(Date.now() - Math.random() * 10000000000).toISOString(),
+        is_video: true,
+      }));
+    } else if (process.env.TENOR_API_KEY) {
+      // Tenor API V2 fallback
+      const endpoint = force ? "featured" : "search";
+      const posParam = req.query.pos ? `&pos=${encodeURIComponent(req.query.pos as string)}` : "";
+      const response = await fetch(
+        `https://tenor.googleapis.com/v2/${endpoint}?q=${encodeURIComponent(q)}&key=${process.env.TENOR_API_KEY}&limit=20${posParam}`
+      );
+      if (!response.ok) throw new Error("Failed to search Tenor V2");
+      const data = await response.json();
+      gifs = (data.results || []).map((item: any) => ({
+        id: `gif_${item.id}`,
+        name: item.content_description || "Animated GIF",
+        url: item.media_formats.gif.url,
+        previewUrl: item.media_formats.tinygif.url,
+        width: item.media_formats.gif.dims[0],
+        height: item.media_formats.gif.dims[1],
+        box_count: 1,
+        dateAdded: new Date(Date.now() - Math.random() * 10000000000).toISOString(),
+        is_video: true,
+      }));
+      next = data.next || "";
+    }
+
+    tenorGifCache.set(cacheKey, { data: { gifs, next }, timestamp: Date.now() });
+    res.json({ success: true, gifs, next });
   } catch (error: any) {
     console.error("GIF Search error:", error, "Query:", req.query.q);
-    res.status(500).json({ success: false, error: "An unexpected error occurred while searching GIFs. Please try again later." });
+    res.status(500).json({ success: false, error: error.message || "An unexpected error occurred while searching GIFs." });
   }
 });
 

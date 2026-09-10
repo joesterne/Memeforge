@@ -1,6 +1,4 @@
-const https = require('https');
-https.get('https://api.giphy.com/v1/gifs/search?q=cat&api_key=dc6zaTOxFJmzC&limit=1', (res) => {
-  let data = '';
-  res.on('data', (chunk) => data += chunk);
-  res.on('end', () => console.log(data));
-});
+fetch("https://api.giphy.com/v1/gifs/search?api_key=dc6zaTOxFJmzC&q=funny&limit=20").then(r => {
+    console.log("Status:", r.status, r.statusText);
+    return r.text();
+}).then(r => console.log(r.substring(0, 200))).catch(console.error);
