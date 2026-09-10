@@ -1259,12 +1259,14 @@ export default function Editor() {
   const handleUndoRef = useRef(handleUndo);
   const handleRedoRef = useRef(handleRedo);
   const saveToFirebaseRef = useRef(saveToFirebase);
+  const deleteSelectedRef = useRef(deleteSelected);
 
   useEffect(() => {
     exportMemeRef.current = exportMeme;
     handleUndoRef.current = handleUndo;
     handleRedoRef.current = handleRedo;
     saveToFirebaseRef.current = saveToFirebase;
+    deleteSelectedRef.current = deleteSelected;
   });
 
   useEffect(() => {
@@ -1287,9 +1289,15 @@ export default function Editor() {
         } else {
           handleUndoRef.current();
         }
+      } else if (cmdOrCtrl && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        handleRedoRef.current();
       } else if (cmdOrCtrl && e.key.toLowerCase() === "s") {
         e.preventDefault();
         saveToFirebaseRef.current();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteSelectedRef.current();
       }
     };
 
