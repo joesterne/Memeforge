@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { LogIn, LogOut, Menu, X, Home, Paintbrush, User, Sun, Moon } from "lucide-react";
+import { LogIn, LogOut, Menu, X, Home, Paintbrush, User, Sun, Moon, BarChart3 } from "lucide-react";
 import { useState } from "react";
 import { AuthModal } from "./AuthModal";
 
@@ -43,6 +43,10 @@ export default function Navbar() {
               <>
                  <Link to="/editor/new" className="text-sm font-semibold hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors text-zinc-700 dark:text-zinc-300 hidden sm:block">
                    Create
+                 </Link>
+                 <Link to="/dashboard" className="flex items-center gap-1.5 text-sm font-semibold hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors text-zinc-700 dark:text-zinc-300 hidden sm:flex">
+                   <BarChart3 className="w-4 h-4 text-indigo-500" />
+                   Analytics
                  </Link>
                  <Link to="/profile" className="flex items-center gap-2 text-sm font-medium hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors bg-black/5 dark:bg-white/5 pr-3 pl-1 py-1 rounded-full border border-transparent hover:border-black/10 dark:hover:border-white/10">
                    {user.photoURL ? (
@@ -102,6 +106,11 @@ export default function Navbar() {
           <Link to="/editor/new" onClick={closeMenu} className="flex items-center gap-3 px-4 py-3 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl transition-all">
             <Paintbrush className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
             <span className="font-medium px-1">Create Meme</span>
+          </Link>
+
+          <Link to="/dashboard" onClick={closeMenu} className="flex items-center gap-3 px-4 py-3 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl transition-all">
+            <BarChart3 className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
+            <span className="font-medium px-1">Analytics Dashboard</span>
           </Link>
 
           {user && (

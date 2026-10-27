@@ -19,10 +19,9 @@ import {
   Sparkles,
   Dices,
   BookMarked,
-  Search,
   Download,
-  Trash2,
-  CheckCircle2
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import {

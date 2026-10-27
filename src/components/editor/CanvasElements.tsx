@@ -94,8 +94,6 @@ export const CanvasText = memo(
         onTransformEnd={handleTransformEnd}
         onDblClick={onDblClick}
         onDblTap={onDblClick}
-        opacity={isExporting ? 1 : 0}
-        listening={false}
       />
     );
   },

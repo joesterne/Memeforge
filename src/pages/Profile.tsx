@@ -121,6 +121,12 @@ export default function Profile() {
                  <div className="text-2xl font-black text-indigo-50">{history.length * 12}</div>
                  <div className="text-[10px] font-bold text-indigo-200 uppercase mt-1">Shares</div>
              </div>
+             <Link
+               to="/dashboard"
+               className="mt-2 w-full py-2.5 px-4 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold text-center transition-all border border-white/20 backdrop-blur-sm shadow-sm"
+             >
+               Open Full Analytics Dashboard →
+             </Link>
          </div>
       </div>
 

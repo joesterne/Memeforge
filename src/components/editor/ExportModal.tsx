@@ -1,5 +1,5 @@
 import React from "react";
-import { Download } from "lucide-react";
+import { Download, Stamp } from "lucide-react";
 
 interface ExportModalProps {
   show: boolean;
@@ -12,6 +12,20 @@ interface ExportModalProps {
   setExportQuality: (quality: number) => void;
   isBackgroundAnimatedGif: boolean;
   exportMeme: () => Promise<void>;
+  watermark?: {
+    enabled: boolean;
+    text: string;
+    opacity: number;
+    position: string;
+  };
+  setWatermark?: React.Dispatch<
+    React.SetStateAction<{
+      enabled: boolean;
+      text: string;
+      opacity: number;
+      position: string;
+    }>
+  >;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -25,6 +39,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   setExportQuality,
   isBackgroundAnimatedGif,
   exportMeme,
+  watermark,
+  setWatermark,
 }) => {
   if (!show) return null;
 
@@ -82,6 +98,60 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               />
             </div>
           )}
+
+          {/* Watermark Toggle */}
+          {watermark && setWatermark && (
+            <div className="pt-2 border-t border-white/5">
+              <label className="text-xs text-zinc-400 uppercase font-bold mb-2 block">
+                Branding
+              </label>
+              <div className="p-3 bg-zinc-950 border border-white/10 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                      watermark.enabled
+                        ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                        : "bg-zinc-800 text-zinc-500 border border-white/5"
+                    }`}
+                  >
+                    <Stamp className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-semibold text-white block">
+                      'MemeForge' Watermark
+                    </span>
+                    <span className="text-[10px] text-zinc-400 block">
+                      {watermark.enabled
+                        ? "Watermark stamped on export"
+                        : "Clean meme without watermark"}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={watermark.enabled}
+                  onClick={() =>
+                    setWatermark((p) => ({
+                      ...p,
+                      enabled: !p.enabled,
+                      text: p.text || "MemeForge",
+                    }))
+                  }
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    watermark.enabled ? "bg-indigo-600" : "bg-zinc-700"
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      watermark.enabled ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="mt-4 flex flex-col gap-2">
             <button
               onClick={async () => {

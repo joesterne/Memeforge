@@ -35,10 +35,10 @@ import {
   ZoomOut,
   Maximize,
   CloudUpload,
-  RotateCw
+  RotateCw,
+  Stamp
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
-import Draggable from "react-draggable";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../lib/firebase";
 import { doc, setDoc, getDoc } from "firebase/firestore";
@@ -53,195 +53,60 @@ import type { CanvasObject } from "../types/canvas";
 import { CanvasImage, CanvasText, AIPromptInput, AIMemeChatInput } from "../components/editor/CanvasElements";
 import { ExportModal } from "../components/editor/ExportModal";
 import { CloseModal } from "../components/editor/CloseModal";
-import { saveRecentCreation } from "../lib/localStorage";
+import { saveRecentCreation, recordMetricEvent } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
 
-const DraggableTextItem = memo(
-  ({
-    obj,
-    renderScale,
-    selectedId,
-    editingTextId,
-    setSelectedId,
-    setEditingTextId,
-    emitUpdate,
-    objectsRef,
-  }: any) => {
-    const nodeRef = useRef<HTMLDivElement>(null);
-
-    const handleRotateStart = (e: React.PointerEvent) => {
-      e.stopPropagation();
-      e.preventDefault();
-      
-      const node = nodeRef.current;
-      if (!node) return;
-      
-      const rect = node.getBoundingClientRect();
-      const centerX = rect.left;
-      const centerY = rect.top;
-
-      const initialAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
-      const initialRotation = obj.rotation || 0;
-
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        const angle = Math.atan2(moveEvent.clientY - centerY, moveEvent.clientX - centerX);
-        const angleDelta = (angle - initialAngle) * (180 / Math.PI);
-        let degrees = initialRotation + angleDelta;
-        
-        const newObjs = objectsRef.current.map((o: any) =>
-          o.id === obj.id ? { ...o, rotation: degrees } : o
-        );
-        emitUpdate(newObjs, true, false);
-      };
-
-      const onPointerUp = () => {
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
-        emitUpdate([...objectsRef.current], false, false);
-      };
-
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
-    };
-
-    return (
-      <Draggable
-        nodeRef={nodeRef}
-        key={obj.id}
-        position={{ x: obj.x, y: obj.y }}
-        scale={renderScale}
-        onStart={() => setSelectedId(obj.id)}
-        onDrag={(e, data) => {
-          const newObjs = objectsRef.current.map((o: any) =>
-            o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
-          );
-          emitUpdate(newObjs, true, false); // skipHistory = true
-        }}
-        onStop={(e, data) => {
-          const newObjs = objectsRef.current.map((o: any) =>
-            o.id === obj.id ? { ...o, x: data.x, y: data.y } : o
-          );
-          emitUpdate(newObjs, false, false); // skipHistory = false
-        }}
-      >
-        <div ref={nodeRef} className="absolute pointer-events-auto cursor-move">
-          <div
-            className={
-              selectedId === obj.id ? "ring-2 ring-indigo-500 rounded relative" : "relative"
-            }
-            style={{
-              fontFamily: obj.fontFamily,
-              fontSize: `${obj.fontSize}px`,
-              color: obj.fill,
-              WebkitTextStroke: obj.stroke
-                ? `${obj.strokeWidth}px ${obj.stroke}`
-                : undefined,
-              textShadow: obj.shadowEnabled
-                ? `2px 2px 10px ${obj.shadowColor || "rgba(0,0,0,0.8)"}`
-                : undefined,
-              lineHeight: 1,
-              whiteSpace: "pre-wrap",
-              transform: `rotate(${obj.rotation || 0}deg)`,
-              transformOrigin: "top left",
-            }}
-            onDoubleClick={() => setEditingTextId(obj.id)}
-          >
-            {selectedId === obj.id && (
-              <div
-                className="absolute -top-8 left-1/2 -translate-x-1/2 w-6 h-6 bg-white rounded-full border-2 border-indigo-500 shadow-md cursor-grab active:cursor-grabbing flex items-center justify-center pointer-events-auto"
-                onPointerDown={handleRotateStart}
-              >
-                <RotateCw className="w-3 h-3 text-indigo-500" />
-              </div>
-            )}
-            {editingTextId === obj.id ? (
-              <textarea
-                autoFocus
-                defaultValue={obj.text}
-                onBlur={(e) => {
-                  setEditingTextId(null);
-                  const newObjs = objectsRef.current.map((o: any) =>
-                    o.id === obj.id ? { ...o, text: e.target.value } : o
-                  );
-                  emitUpdate(newObjs);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.currentTarget.blur();
-                  }
-                }}
-                className="bg-transparent border-none outline-none resize-none overflow-hidden m-0 p-0"
-                style={{
-                  fontFamily: "inherit",
-                  fontSize: "inherit",
-                  color: "inherit",
-                  lineHeight: "inherit",
-                  width: obj.text
-                    ? obj.text.length * obj.fontSize * 0.6 + "px"
-                    : "200px",
-                }}
-                onInput={(e) => {
-                  e.currentTarget.style.width = "0px";
-                  e.currentTarget.style.width =
-                    e.currentTarget.scrollWidth + 20 + "px";
-                  e.currentTarget.style.height = "0px";
-                  e.currentTarget.style.height =
-                    e.currentTarget.scrollHeight + 10 + "px";
-                }}
-              />
-            ) : (
-              obj.text
-            )}
-          </div>
-        </div>
-      </Draggable>
-    );
-  }
-);
-
-export default function Editor() {
-  const { id } = useParams();
-  const location = useLocation();
+export default function Editor({
+  template: propTemplate,
+  templateId: propTemplateId,
+  isCollab = false,
+  roomId: propRoomId,
+  initialObjects = [],
+  onClose,
+}: any) {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const template = location.state?.template;
-  
-  const { votes, handleVote } = useVotes();
-  const templateId = template?.id || id?.replace("template_", "");
-  const templateVotes = templateId ? votes[templateId] : undefined;
-  const upvotes = templateVotes?.upvoters?.length || 0;
-  const downvotes = templateVotes?.downvoters?.length || 0;
-  const score = upvotes - downvotes;
-  const hasUpvoted = user && templateVotes?.upvoters?.includes(user.uid);
-  const hasDownvoted = user && templateVotes?.downvoters?.includes(user.uid);
+  const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  const template = propTemplate || location.state?.template;
+  const templateId = propTemplateId || template?.id || (id?.startsWith("template_") ? id.replace("template_", "") : undefined);
+  const [isRoom, setIsRoom] = useState(Boolean(propRoomId || (id && !id.startsWith("template_"))));
+  const [roomId] = useState(() => propRoomId || (id && !id.startsWith("template_") && id !== "new" ? id : uuidv4()));
 
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [objects, setObjects] = useState<CanvasObject[]>([]);
-  const objectsRef = useRef<CanvasObject[]>([]);
-  const [history, setHistory] = useState<CanvasObject[][]>([[]]);
+  const [saving, setSaving] = useState(false);
+  const [isGridEnabled, setIsGridEnabled] = useState(false);
+  const { votes, handleVote } = useVotes();
+  const currentVoteData = templateId ? votes[templateId] : null;
+  const hasUpvoted = Boolean(user && currentVoteData?.upvoters?.includes(user.uid));
+  const hasDownvoted = Boolean(user && currentVoteData?.downvoters?.includes(user.uid));
+  const score = (currentVoteData?.upvoters?.length || 0) - (currentVoteData?.downvoters?.length || 0);
+
+  const [objects, setObjects] = useState<CanvasObject[]>(initialObjects);
+  const objectsRef = useRef(objects);
+  useEffect(() => { objectsRef.current = objects; }, [objects]);
+
+  const [history, setHistory] = useState<CanvasObject[][]>([initialObjects]);
   const [historyStep, setHistoryStep] = useState(0);
   const historyStepRef = useRef(0);
+  
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  useEffect(() => {
-    objectsRef.current = objects;
-  }, [objects]);
-
-  const [activeUsers, setActiveUsers] = useState<any[]>([]);
-  const [roomId] = useState(() => (id && id !== "new" && !id.startsWith("template_")) ? id : uuidv4());
-  const getProxiedUrl = (url: string | undefined | null) => {
-    if (!url) return "";
-    if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("/")) return url;
-    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
-  };
-
-  const [bgImage] = useImage(getProxiedUrl(template?.url), "anonymous");
-  const [isRoom, setIsRoom] = useState(!id?.startsWith("template_"));
-  const [saving, setSaving] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
-  const [isGridEnabled, setIsGridEnabled] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState<number | "fit">("fit");
+  const [zoomLevel, setZoomLevel] = useState<"fit" | number>("fit");
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+  
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [collabUsers, setCollabUsers] = useState<any[]>([]);
+  
+  const [isExporting, setIsExporting] = useState(false);
+
+  const getProxiedUrl = (url: string | null | undefined) => {
+    if (!url) return "";
+    if (url.startsWith("data:")) return url;
+    return `https://images.weserv.nl/?url=${encodeURIComponent(url)}&output=webp`;
+  };
+  
+  const [bgImage] = useImage(getProxiedUrl(template?.url), "anonymous");
+
   const lastCenterRef = useRef<{ x: number; y: number } | null>(null);
   const lastDistRef = useRef<number>(0);
   const [isBackgroundAnimatedGif, setIsBackgroundAnimatedGif] = useState(
@@ -256,8 +121,8 @@ export default function Editor() {
   const [generatingAI, setGeneratingAI] = useState(false);
   const [watermark, setWatermark] = useState({
     enabled: false,
-    text: "Watermark",
-    opacity: 0.5,
+    text: "MemeForge",
+    opacity: 0.75,
     position: "bottom-right",
   });
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -860,6 +725,9 @@ export default function Editor() {
       document.body.removeChild(link);
       setHasUnsavedChanges(false);
       setIsExporting(false);
+      if (roomId) {
+        recordMetricEvent(roomId, template?.name || "Meme", "download");
+      }
     }
   };
 
@@ -907,10 +775,16 @@ export default function Editor() {
           files: [file],
         });
         toast.success("Meme shared successfully!");
+        if (roomId) {
+          recordMetricEvent(roomId, template?.name || "Meme", "share");
+        }
       } else {
         const url = window.URL.createObjectURL(blob);
         window.open(url, '_blank');
         toast.info("Opened preview in new tab. You can long-press or right-click to share.");
+        if (roomId) {
+          recordMetricEvent(roomId, template?.name || "Meme", "share");
+        }
       }
     } catch (e: any) {
       if (e.name !== "AbortError") {
@@ -1107,7 +981,7 @@ export default function Editor() {
   const onTextDblClick = useCallback((e: any) => {
     const textNode = e.target;
     textNode.hide();
-    trRef.current.hide();
+    if (trRef.current) trRef.current.hide();
 
     const textPosition = textNode.absolutePosition();
     const stageBox = stageRef.current.container().getBoundingClientRect();
@@ -1167,8 +1041,10 @@ export default function Editor() {
       textarea.parentNode?.removeChild(textarea);
       window.removeEventListener("click", handleOutsideClick);
       textNode.show();
-      trRef.current.show();
-      trRef.current.forceUpdate();
+      if (trRef.current) {
+        trRef.current.show();
+        trRef.current.forceUpdate();
+      }
 
       emitUpdate(
         objects.map((o) =>
@@ -1528,7 +1404,7 @@ export default function Editor() {
               })}
 
               {/* Transformer Selection */}
-              {selectedId && objects.find(o => o.id === selectedId)?.type === "image" && (
+              {selectedId && (
                 <Transformer
                   ref={trRef}
                   keepRatio={true}
@@ -1556,18 +1432,22 @@ export default function Editor() {
                   x={20}
                   y={
                     watermark.position.includes("bottom")
-                      ? logicalSize.height - 40
-                      : 20
+                      ? logicalSize.height - Math.max(14, Math.floor(logicalSize.width * 0.038)) - 16
+                      : 16
                   }
                   width={logicalSize.width - 40}
                   align={
                     watermark.position.includes("right") ? "right" : "left"
                   }
-                  fontSize={24}
+                  fontSize={Math.max(14, Math.floor(logicalSize.width * 0.038))}
                   fontFamily="Impact, sans-serif"
-                  fill="white"
-                  stroke="black"
-                  strokeWidth={1}
+                  fill="rgba(255, 255, 255, 0.9)"
+                  stroke="rgba(0, 0, 0, 0.85)"
+                  strokeWidth={Math.max(1, Math.floor(Math.max(14, Math.floor(logicalSize.width * 0.038)) / 10))}
+                  shadowColor="rgba(0, 0, 0, 0.75)"
+                  shadowBlur={3}
+                  shadowOffsetX={1}
+                  shadowOffsetY={1}
                   opacity={watermark.opacity}
                   listening={false}
                 />
@@ -1575,35 +1455,7 @@ export default function Editor() {
             </Layer>
           </Stage>
 
-          {/* HTML Text Overlay using react-draggable */}
-          {!isExporting && (
-            <div
-              className="absolute top-0 left-0 w-full h-full pointer-events-none"
-              style={{
-                transform: `translate(${currentStagePos.x}px, ${currentStagePos.y}px) scale(${renderScale})`,
-                transformOrigin: "0 0",
-              }}
-            >
-              {objects.map((obj) => {
-                if (obj.type === "text") {
-                  return (
-                    <DraggableTextItem
-                      key={obj.id}
-                      obj={obj}
-                      renderScale={renderScale}
-                      selectedId={selectedId}
-                      editingTextId={editingTextId}
-                      setSelectedId={setSelectedId}
-                      setEditingTextId={setEditingTextId}
-                      emitUpdate={emitUpdate}
-                      objectsRef={objectsRef}
-                    />
-                  );
-                }
-                return null;
-              })}
-            </div>
-          )}
+
           </div>
         </div>
 
@@ -2164,83 +2016,142 @@ export default function Editor() {
             )}
 
           <div className="border-t border-white/5 pt-6">
-            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">
-              Watermark
-            </h3>
-            <label className="flex items-center gap-2 mb-3 cursor-pointer text-sm font-bold text-white">
-              <input
-                type="checkbox"
-                checked={watermark.enabled}
-                onChange={(e) => {
-                  setWatermark((p) => ({ ...p, enabled: e.target.checked }));
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1.5">
+                <Stamp className="w-3.5 h-3.5 text-indigo-400" />
+                Watermark
+              </h3>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={watermark.enabled}
+                onClick={() => {
+                  setWatermark((p) => ({
+                    ...p,
+                    enabled: !p.enabled,
+                    text: p.text || "MemeForge",
+                  }));
                   markDirty();
                 }}
-                className="w-4 h-4 rounded border border-white/20 bg-zinc-950 accent-indigo-500"
-              />
-              Enable Watermark
-            </label>
-            {watermark.enabled && (
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[10px] text-zinc-400 flex justify-between mb-1 pl-1">
-                    <span>Watermark Text</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={watermark.text}
-                    onChange={(e) => {
-                      setWatermark((p) => ({ ...p, text: e.target.value }));
-                      markDirty();
-                    }}
-                    className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[10px] text-zinc-400 mb-1 pl-1 block">
-                      Position
-                    </label>
-                    <select
-                      value={watermark.position}
-                      onChange={(e) => {
-                        setWatermark((p) => ({
-                          ...p,
-                          position: e.target.value as any,
-                        }));
-                        markDirty();
-                      }}
-                      className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
-                    >
-                      <option value="bottom-right">Bottom Right</option>
-                      <option value="bottom-left">Bottom Left</option>
-                      <option value="top-right">Top Right</option>
-                      <option value="top-left">Top Left</option>
-                    </select>
-                  </div>
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  watermark.enabled ? "bg-indigo-600" : "bg-zinc-800"
+                }`}
+                title={watermark.enabled ? "Disable watermark" : "Enable watermark"}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    watermark.enabled ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-2.5 bg-zinc-950/60 border border-white/5 rounded-xl flex items-center justify-between text-xs">
+                <span className="text-zinc-300 font-medium">'MemeForge' Stamp</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
+                  watermark.enabled 
+                    ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30" 
+                    : "bg-zinc-800 text-zinc-500"
+                }`}>
+                  {watermark.enabled ? "ACTIVE ON EXPORT" : "OFF"}
+                </span>
+              </div>
+
+              {watermark.enabled && (
+                <div className="space-y-3 pt-1">
                   <div>
                     <label className="text-[10px] text-zinc-400 flex justify-between mb-1 pl-1">
-                      <span>Opacity</span>
-                      <span>{Math.round(watermark.opacity * 100)}%</span>
+                      <span>Watermark Text</span>
                     </label>
                     <input
-                      type="range"
-                      min="0.1"
-                      max="1"
-                      step="0.1"
-                      value={watermark.opacity}
+                      type="text"
+                      value={watermark.text}
                       onChange={(e) => {
-                        setWatermark((p) => ({
-                          ...p,
-                          opacity: parseFloat(e.target.value),
-                        }));
+                        setWatermark((p) => ({ ...p, text: e.target.value }));
                         markDirty();
                       }}
-                      className="w-full h-2 mt-2 accent-indigo-500 bg-zinc-950 border border-white/10 rounded-lg appearance-none cursor-pointer"
+                      className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white"
+                      placeholder="e.g. MemeForge"
                     />
+                    <div className="flex gap-1.5 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWatermark((p) => ({ ...p, text: "MemeForge" }));
+                          markDirty();
+                        }}
+                        className={`text-[10px] px-2 py-1 rounded-md border transition-all ${
+                          watermark.text === "MemeForge"
+                            ? "bg-indigo-600/30 text-indigo-300 border-indigo-500/40"
+                            : "bg-zinc-950/80 text-zinc-400 border-white/5 hover:border-white/20"
+                        }`}
+                      >
+                        MemeForge
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWatermark((p) => ({ ...p, text: "Created with MemeForge" }));
+                          markDirty();
+                        }}
+                        className={`text-[10px] px-2 py-1 rounded-md border transition-all ${
+                          watermark.text === "Created with MemeForge"
+                            ? "bg-indigo-600/30 text-indigo-300 border-indigo-500/40"
+                            : "bg-zinc-950/80 text-zinc-400 border-white/5 hover:border-white/20"
+                        }`}
+                      >
+                        Created with MemeForge
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-zinc-400 mb-1 pl-1 block">
+                        Position
+                      </label>
+                      <select
+                        value={watermark.position}
+                        onChange={(e) => {
+                          setWatermark((p) => ({
+                            ...p,
+                            position: e.target.value as any,
+                          }));
+                          markDirty();
+                        }}
+                        className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
+                      >
+                        <option value="bottom-right">Bottom Right</option>
+                        <option value="bottom-left">Bottom Left</option>
+                        <option value="top-right">Top Right</option>
+                        <option value="top-left">Top Left</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-400 flex justify-between mb-1 pl-1">
+                        <span>Opacity</span>
+                        <span>{Math.round(watermark.opacity * 100)}%</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1"
+                        step="0.05"
+                        value={watermark.opacity}
+                        onChange={(e) => {
+                          setWatermark((p) => ({
+                            ...p,
+                            opacity: parseFloat(e.target.value),
+                          }));
+                          markDirty();
+                        }}
+                        className="w-full h-2 mt-2 accent-indigo-500 bg-zinc-950 border border-white/10 rounded-lg appearance-none cursor-pointer"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           <div className="flex-1 border-t border-white/5 pt-6 flex flex-col">
@@ -2248,6 +2159,57 @@ export default function Editor() {
               Export & Sync
             </h3>
             <div className="flex flex-col gap-3">
+              {/* Quick Watermark Toggle before download */}
+              <div className="p-3 bg-zinc-950/90 border border-white/10 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                      watermark.enabled
+                        ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                        : "bg-zinc-800 text-zinc-500 border border-white/5"
+                    }`}
+                  >
+                    <Stamp className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <span>'MemeForge' Watermark</span>
+                      {watermark.enabled && (
+                        <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1 py-0.2 rounded font-mono">
+                          ON
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-zinc-400">
+                      {watermark.enabled ? "Included on export" : "Off for clean export"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={watermark.enabled}
+                  onClick={() => {
+                    setWatermark((p) => ({
+                      ...p,
+                      enabled: !p.enabled,
+                      text: p.text || "MemeForge",
+                    }));
+                    markDirty();
+                  }}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    watermark.enabled ? "bg-indigo-600" : "bg-zinc-700"
+                  }`}
+                  title={watermark.enabled ? "Disable watermark" : "Enable watermark"}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      watermark.enabled ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={saveToFirebase}
@@ -2370,6 +2332,8 @@ export default function Editor() {
         setExportQuality={setExportQuality}
         isBackgroundAnimatedGif={isBackgroundAnimatedGif}
         exportMeme={exportMeme}
+        watermark={watermark}
+        setWatermark={setWatermark}
       />
     </>
   );
