@@ -59,7 +59,7 @@ export default function UploadTemplateModal({
 
     try {
       const options = {
-        maxSizeMB: 0.08,
+        maxSizeMB: 0.07,
         maxWidthOrHeight: 800,
         useWebWorker: true,
       };

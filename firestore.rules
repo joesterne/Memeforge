@@ -147,13 +147,27 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(templateId) && existing().userId == request.auth.uid;
     }
 
+    // A voter may only add/remove their OWN uid in each list - nobody can
+    // rewrite other users' votes wholesale.
+    function voteListChangeOk(newList, oldList) {
+      return (newList.size() == oldList.size() && newList.hasAll(oldList)) ||
+             (newList.size() == oldList.size() + 1 && newList.hasAll(oldList) && (request.auth.uid in newList) && !(request.auth.uid in oldList)) ||
+             (newList.size() == oldList.size() - 1 && oldList.hasAll(newList) && (request.auth.uid in oldList) && !(request.auth.uid in newList));
+    }
+    function voteCreateOk() {
+      return (incoming().upvoters.size() == 0 || (incoming().upvoters.size() == 1 && (request.auth.uid in incoming().upvoters))) &&
+             (incoming().downvoters.size() == 0 || (incoming().downvoters.size() == 1 && (request.auth.uid in incoming().downvoters))) &&
+             !(incoming().upvoters.size() == 1 && incoming().downvoters.size() == 1);
+    }
+
     match /templateVotes/{templateId} {
       allow get: if isValidId(templateId);
       allow list: if resource.data.upvoters is list;
-      allow create: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming());
+      allow create: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming()) && voteCreateOk();
       allow update: if isSignedIn() && isValidId(templateId) && isValidTemplateVote(incoming()) && (
         incoming().diff(existing()).affectedKeys().hasOnly(['upvoters', 'downvoters'])
-      );
+      ) && voteListChangeOk(incoming().upvoters, existing().upvoters)
+        && voteListChangeOk(incoming().downvoters, existing().downvoters);
       allow delete: if false;
     }
 

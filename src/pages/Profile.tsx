@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { Navigate, Link, useSearchParams } from "react-router";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { handleFirestoreError, OperationType } from "../lib/firebaseErrorHandler";
 import { History, BarChart, Image as ImageIcon, Sparkles, CheckCircle2, User } from "lucide-react";
@@ -17,14 +17,30 @@ export default function Profile() {
 
   useEffect(() => {
     if (paymentStatus === "success") {
-      toast.success("Payment successful! You are now a Pro user.");
-      // optionally clean up the URL
-      window.history.replaceState({}, document.title, window.location.pathname);
+      // The ?payment=success param alone proves nothing (anyone can type it).
+      // Only claim Pro when the users/{uid} doc the webhook updates says so.
+      (async () => {
+        let isPro = false;
+        try {
+          if (user && db && db.app.options.projectId !== "MOCK") {
+            const snap = await getDoc(doc(db, "users", user.uid));
+            isPro = snap.exists() && snap.data().isPro === true;
+          }
+        } catch {
+          // fall through to the pending message
+        }
+        if (isPro) {
+          toast.success("Payment successful! You are now a Pro user.");
+        } else {
+          toast.info("Payment received - Pro activation can take a moment. If it does not appear shortly, contact support.");
+        }
+        window.history.replaceState({}, document.title, window.location.pathname);
+      })();
     } else if (paymentStatus === "cancelled") {
       toast.error("Payment was cancelled.");
       window.history.replaceState({}, document.title, window.location.pathname);
     }
-  }, [paymentStatus]);
+  }, [paymentStatus, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -98,7 +114,13 @@ export default function Profile() {
               <p className="text-zinc-400 text-sm font-medium">{user.email}</p>
            </div>
          </div>
-
+        <button
+          onClick={handleUpgrade}
+          disabled={isUpgrading}
+          className="relative z-10 shrink-0 rounded-full bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-500 disabled:opacity-60 transition-colors"
+        >
+          {isUpgrading ? "Redirecting..." : "Upgrade to Pro"}
+        </button>
       </div>
 
       {/* Analytics */}

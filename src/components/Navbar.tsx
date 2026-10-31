@@ -44,6 +44,9 @@ export default function Navbar() {
                  <Link to="/editor/new" className="text-sm font-semibold hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors text-zinc-700 dark:text-zinc-300 hidden sm:block">
                    Create
                  </Link>
+                 <Link to="/pro" className="text-sm font-semibold hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors text-zinc-700 dark:text-zinc-300 hidden sm:block">
+                   Go Pro
+                 </Link>
                  <Link to="/dashboard" className="flex items-center gap-1.5 text-sm font-semibold hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors text-zinc-700 dark:text-zinc-300 hidden sm:flex">
                    <BarChart3 className="w-4 h-4 text-indigo-500" />
                    Analytics

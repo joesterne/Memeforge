@@ -125,7 +125,7 @@ async function startServer() {
     });
   });
 
-  // API Routes
+  // API Routes (image proxy restricted to meme CDN hosts)
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
@@ -135,13 +135,26 @@ async function startServer() {
       const imageUrl = req.query.url as string;
       if (!imageUrl) return res.status(400).send("No url provided");
       
-      const response = await fetch(imageUrl);
+      const parsedUrl = new URL(imageUrl);
+      const cdnHosts = ["imgflip", "tenor", "giphy"];
+      const hostAllowed = cdnHosts.some(
+        (name) => parsedUrl.hostname === name + ".com" || parsedUrl.hostname.endsWith("." + name + ".com")
+      );
+      if (parsedUrl.protocol !== "https:" || !hostAllowed) {
+        return res.status(403).send("Image host not allowed");
+      }
+      const response = await fetch(imageUrl, { signal: AbortSignal.timeout(10000), redirect: "error" });
       if (!response.ok) throw new Error("Failed to fetch image");
       
-      const contentType = response.headers.get("content-type");
-      if (contentType) res.setHeader("Content-Type", contentType);
-      
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.startsWith("image/")) return res.status(415).send("Not an image");
+      const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+      if (Number(response.headers.get("content-length") || 0) > MAX_IMAGE_BYTES) {
+        return res.status(413).send("Image too large");
+      }
       const arrayBuffer = await response.arrayBuffer();
+      if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) return res.status(413).send("Image too large");
+      res.setHeader("Content-Type", contentType);
       res.send(Buffer.from(arrayBuffer));
     } catch (error) {
       console.error("Proxy error:", error);
@@ -307,6 +320,11 @@ setInterval(() => {
   for (const [key, value] of tenorGifCache.entries()) {
     if (now - value.timestamp > CACHE_DURATION_MS) {
       tenorGifCache.delete(key);
+    }
+  }
+  for (const [key, value] of memeSearchCache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION_MS) {
+      memeSearchCache.delete(key);
     }
   }
 }, Math.max(60000, CACHE_DURATION_MS));
@@ -571,7 +589,7 @@ const aiImageCache = new SimpleCache(100);
     }
   });
 
-  app.post("/api/create-checkout-session", apiLimiter, express.json({ limit: '10kb' }), async (req, res) => {
+  app.post("/api/create-checkout-session", express.json({ limit: '10kb' }), async (req, res) => {
     try {
       const stripe = getStripe();
       const { userId } = req.body;
@@ -587,11 +605,12 @@ const aiImageCache = new SimpleCache(100);
                 description: "Unlock premium templates, AI features, and more.",
               },
               unit_amount: 999, // $9.99
+              recurring: { interval: "month" },
             },
             quantity: 1,
           },
         ],
-        mode: "payment",
+        mode: "subscription",
         success_url: `${process.env.APP_URL || "http://localhost:3000"}/profile?payment=success`,
         cancel_url: `${process.env.APP_URL || "http://localhost:3000"}/profile?payment=cancelled`,
       });
@@ -609,19 +628,24 @@ const aiImageCache = new SimpleCache(100);
       if (!sig) return res.status(400).send("No signature");
 
       const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-      let event;
-
-      if (endpointSecret) {
-        event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-      } else {
-        // Fallback for local development if no secret is set
-        event = JSON.parse(req.body.toString());
+      if (!endpointSecret) {
+        // Fail closed: without the signing secret there is no way to verify
+        // the event really came from Stripe, and an unverified checkout
+        // event would upgrade any account for free.
+        console.error("Webhook signing secret is not set; rejecting webhook.");
+        return res.status(500).send("Webhook not configured");
       }
+      const event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
 
       if (event.type === "checkout.session.completed") {
         const session = event.data.object as any;
         const userId = session.client_reference_id;
         if (userId) {
+          // NOTE: this writes with the client SDK from the server, which
+          // Firestore rules cannot authenticate. Production needs the Firebase
+          // Admin SDK with a service account for this upgrade write; failures
+          // surface as a 500 (outer catch) so Stripe retries and the failure
+          // stays visible instead of silently dropping the upgrade.
           const { db } = await import("./src/lib/firebase");
           if (db && db.app.options.projectId !== "MOCK") {
             const { doc, updateDoc } = await import("firebase/firestore");
@@ -648,6 +672,11 @@ const aiImageCache = new SimpleCache(100);
     });
     app.use(vite.middlewares);
   } else {
+    // Never serve the server bundle or source maps as static downloads.
+    app.use((req, res, next) => {
+      if (req.path === "/server.cjs" || req.path.endsWith(".map")) return res.status(404).end();
+      next();
+    });
     app.use(
       express.static(__dirname, {
         setHeaders: (res, path) => {

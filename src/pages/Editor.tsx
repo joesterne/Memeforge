@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, memo } from "react";
-import { useParams, useLocation, useNavigate } from "react-router";
+import { useParams, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   Stage,
   Layer,
@@ -68,7 +68,21 @@ export default function Editor({
   const { user } = useAuth();
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
-  const template = propTemplate || location.state?.template;
+  const [searchParams] = useSearchParams();
+  // "Use GIF" links from Home land on /editor/gif?id=..&url=..&title=.. with no
+  // router state - build the template from the query params so the GIF loads.
+  const gifTemplate = id === "gif" && searchParams.get("url")
+    ? {
+        id: searchParams.get("id") || "gif",
+        name: searchParams.get("title") || "GIF Template",
+        url: searchParams.get("url") as string,
+        width: 500,
+        height: 500,
+        box_count: 2,
+        is_video: true,
+      }
+    : undefined;
+  const template = propTemplate || location.state?.template || gifTemplate;
   const templateId = propTemplateId || template?.id || (id?.startsWith("template_") ? id.replace("template_", "") : undefined);
   const [isRoom, setIsRoom] = useState(Boolean(propRoomId || (id && !id.startsWith("template_"))));
   const [roomId] = useState(() => propRoomId || (id && !id.startsWith("template_") && id !== "new" ? id : uuidv4()));
@@ -829,7 +843,8 @@ export default function Editor({
       const ref = doc(db, "submissions", docId);
       await setDoc(ref, {
         userId: user.uid,
-        imageUrl: uri,
+        userName: user.displayName || user.email || "Anonymous",
+        memeUrl: uri,
         createdAt: new Date().toISOString(),
       });
       toast.success("Meme submitted to the database successfully!");

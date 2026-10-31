@@ -235,7 +235,7 @@ export default function AnalyticsDashboard() {
     const daysMap = new Map<string, { date: string; displayDate: string; views: number; likes: number; shares: number; downloads: number }>();
 
     // Prepare chronological bucket keys
-    const dayCount = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 14;
+    const dayCount = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90;
     for (let i = dayCount - 1; i >= 0; i--) {
       const d = new Date(Date.now() - i * 86400000);
       const key = d.toISOString().split("T")[0];
@@ -283,6 +283,21 @@ export default function AnalyticsDashboard() {
 
     return { views, likes, shares, downloads, engagementRate };
   }, [filteredEvents]);
+
+  // Views change vs the previous equivalent window (was a hardcoded +14.2%).
+  const viewsDeltaPct = useMemo(() => {
+    const windowMs = Date.now() - cutoffDate.getTime();
+    const prevStart = cutoffDate.getTime() - windowMs;
+    let prevViews = 0;
+    effectiveEvents.forEach((evt) => {
+      if (evt.type !== "view") return;
+      if (selectedMemeFilter !== "all" && evt.memeId !== selectedMemeFilter) return;
+      const t = new Date(evt.timestamp).getTime();
+      if (t >= prevStart && t < cutoffDate.getTime()) prevViews++;
+    });
+    if (prevViews === 0) return null;
+    return ((totals.views - prevViews) / prevViews) * 100;
+  }, [effectiveEvents, cutoffDate, totals.views, selectedMemeFilter]);
 
   // Top performing memes by engagement
   const topMemes = useMemo(() => {
@@ -427,7 +442,7 @@ export default function AnalyticsDashboard() {
           </div>
           <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-2">
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>+14.2%</span>
+            <span>{viewsDeltaPct !== null ? `${viewsDeltaPct >= 0 ? "+" : ""}${viewsDeltaPct.toFixed(1)}%` : "—"}</span>
             <span className="text-zinc-400 font-normal">vs previous period</span>
           </div>
         </div>

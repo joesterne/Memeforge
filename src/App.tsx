@@ -14,6 +14,7 @@ import { Toaster } from "sonner";
 const Home = lazy(() => import("./pages/Home"));
 const Editor = lazy(() => import("./pages/Editor"));
 const Profile = lazy(() => import("./pages/Profile"));
+const Pro = lazy(() => import("./pages/Pro"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 const LoadingSkeleton = () => (
@@ -43,6 +44,7 @@ export default function App() {
                     <Route path="/" element={<Home />} />
                     <Route path="/editor/:id" element={<Editor />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/pro" element={<Pro />} />
                     <Route path="/dashboard" element={<Dashboard />} />
                   </Routes>
                 </Suspense>

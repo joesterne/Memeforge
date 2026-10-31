@@ -53,5 +53,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     toast.error(`Database error during ${operationType}: ${errorMessage}`);
   }
   
-  throw new Error(JSON.stringify(errInfo));
+  // Log + toast only. This helper is called from catch blocks; rethrowing
+  // turned handled errors into unhandled rejections in async flows.
 }

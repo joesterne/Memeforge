@@ -28,6 +28,8 @@ import {
   collection,
   query,
   where,
+  orderBy,
+  limit,
   getDocs,
   deleteDoc,
   doc,
@@ -322,7 +324,7 @@ export default function Home() {
         // Fetch custom templates from Firestore
         if (db && db.app.options.projectId !== "MOCK") {
           try {
-            const snaps = await getDocs(collection(db, "templates"));
+            const snaps = await getDocs(query(collection(db, "templates"), orderBy("createdAt", "desc"), limit(50)));
             const customTemplates = snaps.docs.map(doc => ({
               id: doc.id,
               ...doc.data(),
