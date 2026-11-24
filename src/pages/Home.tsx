@@ -50,6 +50,10 @@ import { toast } from "sonner";
 import { getRecentCreations, deleteRecentCreation, RecentMeme } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
 import { BOOKMARKS } from "../data/bookmarks";
+import TrendingTagsBar, {
+  TRENDING_TAGS,
+  matchesTrendingTag,
+} from "../components/TrendingTagsBar";
 
 interface MemeTemplate {
   id: string;
@@ -75,6 +79,7 @@ export default function Home() {
   const [templates, setTemplates] = useState<MemeTemplate[]>(cachedMemes || []);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
+  const [selectedTag, setSelectedTag] = useState<string>("all");
   const [activeTab, setActiveTab] = useState<"still" | "gif" | "library">("still");
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
@@ -594,11 +599,41 @@ export default function Home() {
     [user],
   );
 
+  const tagCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: templates.length };
+    for (const tag of TRENDING_TAGS) {
+      if (tag.id === "all") continue;
+      counts[tag.id] = templates.filter((t) => matchesTrendingTag(t.name, tag.id)).length;
+    }
+    return counts;
+  }, [templates]);
+
+  const handleSelectTag = useCallback((tagId: string) => {
+    setSelectedTag(tagId);
+    if (activeTab === "gif" && tagId !== "all") {
+      const tag = TRENDING_TAGS.find((t) => t.id === tagId);
+      if (tag) {
+        setSearch(tag.gifQuery);
+      }
+    } else if (activeTab === "gif" && tagId === "all") {
+      setSearch("");
+    }
+  }, [activeTab]);
+
+  const handleClearFilters = useCallback(() => {
+    setSelectedTag("all");
+    setSearch("");
+  }, []);
+
   const sortedAndFilteredTemplates = useMemo(() => {
-    let result = templates.filter((t) =>
-      t.name.toLowerCase().includes(deferredSearch.toLowerCase()) || 
-      (t as any)._query === deferredSearch.trim()
-    );
+    let result = templates.filter((t) => {
+      const matchesSearch =
+        !deferredSearch.trim() ||
+        t.name.toLowerCase().includes(deferredSearch.toLowerCase()) || 
+        (t as any)._query === deferredSearch.trim();
+      const matchesTag = selectedTag === "all" || matchesTrendingTag(t.name, selectedTag);
+      return matchesSearch && matchesTag;
+    });
 
     // Inject favorites that might not be in the current templates pool
     if (sortBy === "favorites") {
@@ -611,9 +646,13 @@ export default function Home() {
         box_count: 2,
       }));
 
-      result = favoriteTemplates.filter((t) =>
-        t.name.toLowerCase().includes(deferredSearch.toLowerCase()),
-      );
+      result = favoriteTemplates.filter((t) => {
+        const matchesSearch =
+          !deferredSearch.trim() ||
+          t.name.toLowerCase().includes(deferredSearch.toLowerCase());
+        const matchesTag = selectedTag === "all" || matchesTrendingTag(t.name, selectedTag);
+        return matchesSearch && matchesTag;
+      });
     } else {
       switch (sortBy) {
         case "recent":
@@ -650,10 +689,14 @@ export default function Home() {
       }
     }
     return result;
-  }, [templates, deferredSearch, sortBy, recentIds, favorites]);
+  }, [templates, deferredSearch, selectedTag, sortBy, recentIds, favorites]);
 
   const sortedAndFilteredGifs = useMemo(() => {
     let result = [...gifs];
+
+    if (selectedTag !== "all") {
+      result = result.filter((g) => matchesTrendingTag(g.name || "", selectedTag));
+    }
 
     if (gifSortBy === "favorites") {
       const favoriteTemplates = Object.values(favorites)
@@ -712,7 +755,7 @@ export default function Home() {
       }
     }
     return result;
-  }, [gifs, deferredSearch, gifSortBy, recentIds, favorites]);
+  }, [gifs, deferredSearch, selectedTag, gifSortBy, recentIds, favorites]);
 
   const feelLucky = useCallback(() => {
     const list = activeTab === "gif" ? gifs : templates;
@@ -754,22 +797,23 @@ export default function Home() {
             I'm Feeling Lucky
           </button>
         </div>
+      </div>
 
-        <div className="flex flex-wrap justify-center gap-2 mt-4 px-4">
-          {["trending", "funny", "gaming", "reaction", "animals", "work", "sports", "cat", "dog"].map((tag) => (
-            <button
-              key={tag}
-              onClick={() => setSearch(search.toLowerCase() === tag ? "" : tag)}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-colors border capitalize ${
-                search.toLowerCase() === tag
-                  ? "bg-indigo-600 border-indigo-500 text-white"
-                  : "bg-zinc-800/50 border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-              }`}
-            >
-              {tag}
-            </button>
-          ))}
-        </div>
+      {/* Trending Tags Bar */}
+      <div className="w-full max-w-7xl mx-auto px-2">
+        <TrendingTagsBar
+          selectedTag={selectedTag}
+          onSelectTag={handleSelectTag}
+          tagCounts={tagCounts}
+          activeTab={activeTab}
+          totalMatchingTemplates={
+            activeTab === "still"
+              ? sortedAndFilteredTemplates.length
+              : sortedAndFilteredGifs.length
+          }
+          onClearFilters={handleClearFilters}
+          searchQuery={search}
+        />
       </div>
 
       {recentCreations.length > 0 && (
@@ -915,8 +959,10 @@ export default function Home() {
       {activeTab === "still" && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pt-4 gap-4">
           <h2 className="text-xl font-bold flex items-center gap-2 text-zinc-100 tracking-tight">
-            <TrendingUp className="text-indigo-400 w-5 h-5" /> Trending
-            Templates
+            <TrendingUp className="text-indigo-400 w-5 h-5" />
+            {selectedTag !== "all"
+              ? `${TRENDING_TAGS.find((t) => t.id === selectedTag)?.label || "Trending"} Templates`
+              : "Trending Templates"}
           </h2>
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div className="flex items-center gap-2 bg-zinc-900 border border-white/10 rounded-lg p-1">
@@ -976,13 +1022,25 @@ export default function Home() {
           <div className="flex flex-col items-center justify-center p-12 bg-zinc-900 border border-white/10 rounded-3xl gap-4 col-span-full mt-4">
             <Search className="w-12 h-12 text-zinc-500 mb-4" />
             <h3 className="text-xl font-bold text-white text-center">
-              No local templates found for "{search}"
+              {search
+                ? `No local templates found for "${search}"`
+                : `No templates found in "${TRENDING_TAGS.find((t) => t.id === selectedTag)?.label || "Category"}"`}
             </h3>
             <p className="text-zinc-400 text-center max-w-md">
-              Search the wider web or create one instantly with AI.
+              {selectedTag !== "all"
+                ? "Try picking a different trending category or resetting your tag filter."
+                : "Search the wider web or create one instantly with AI."}
             </p>
 
             <div className="flex flex-col sm:flex-row gap-4 mt-6">
+              {selectedTag !== "all" && (
+                <button
+                  onClick={handleClearFilters}
+                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20"
+                >
+                  Show All Templates
+                </button>
+              )}
               <button
                 onClick={searchWeb}
                 disabled={searchingWeb || generatingAI}
@@ -1022,8 +1080,10 @@ export default function Home() {
       {activeTab === "gif" && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pt-4 gap-4">
           <h2 className="text-xl font-bold flex items-center gap-2 text-zinc-100 tracking-tight">
-            <TrendingUp className="text-indigo-400 w-5 h-5" /> Trending Animated
-            GIFs
+            <TrendingUp className="text-indigo-400 w-5 h-5" />
+            {selectedTag !== "all"
+              ? `${TRENDING_TAGS.find((t) => t.id === selectedTag)?.label || "Trending"} GIFs`
+              : "Trending Animated GIFs"}
           </h2>
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div className="flex items-center gap-2 bg-zinc-900 border border-white/10 rounded-lg p-1">

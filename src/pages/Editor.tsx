@@ -36,7 +36,9 @@ import {
   Maximize,
   CloudUpload,
   RotateCw,
-  Stamp
+  Stamp,
+  Link2,
+  Check
 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "../contexts/AuthContext";
@@ -53,6 +55,18 @@ import type { CanvasObject } from "../types/canvas";
 import { CanvasImage, CanvasText, AIPromptInput, AIMemeChatInput } from "../components/editor/CanvasElements";
 import { ExportModal } from "../components/editor/ExportModal";
 import { CloseModal } from "../components/editor/CloseModal";
+import {
+  ShareModal,
+  decodeShareState,
+  encodeShareState,
+  copyImageBlobToClipboard,
+  copyTextWithFallback,
+  type RenderedMemeSnapshot,
+} from "../components/editor/ShareModal";
+import {
+  FontPickerDropdown,
+  ensureFontLoaded,
+} from "../components/editor/FontPickerDropdown";
 import { saveRecentCreation, recordMetricEvent } from "../lib/localStorage";
 import { useVotes } from "../contexts/VotesContext";
 
@@ -132,6 +146,10 @@ export default function Editor({
   const [exportScale, setExportScale] = useState<number>(1);
   const [exportQuality, setExportQuality] = useState<number>(0.9);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [quickCopyingImage, setQuickCopyingImage] = useState(false);
+  const [quickCopiedLink, setQuickCopiedLink] = useState(false);
+  const [activeFont, setActiveFont] = useState<string>("'Anton', Impact, sans-serif");
   const [generatingAI, setGeneratingAI] = useState(false);
   const [watermark, setWatermark] = useState({
     enabled: false,
@@ -210,6 +228,24 @@ export default function Editor({
   }, [bgImage, upImage, uploadedImageUrl, template]);
 
   useEffect(() => {
+    // Restore meme state if opened from a self-contained ?share= link
+    const params = new URLSearchParams(location.search);
+    const sharedParam = params.get("share");
+    if (sharedParam) {
+      const decoded = decodeShareState(sharedParam);
+      if (decoded) {
+        if (decoded.t) setUploadedImageUrl(decoded.t);
+        if (decoded.o && Array.isArray(decoded.o)) {
+          setObjects(decoded.o);
+          setHistory([decoded.o]);
+          setHistoryStep(0);
+          historyStepRef.current = 0;
+        }
+        if (decoded.w) setWatermark(decoded.w);
+        return;
+      }
+    }
+
     // If it's an existing room (not template_), fetch from Firestore
     if (!db || db.app.options.projectId === "MOCK") return;
     if (isRoom && id && id !== "new") {
@@ -224,6 +260,7 @@ export default function Editor({
               historyStepRef.current = 0;
             }
             if (data.templateUrl) setUploadedImageUrl(data.templateUrl);
+            if (data.watermark) setWatermark(data.watermark);
           }
         })
         .catch((err) => {
@@ -236,7 +273,7 @@ export default function Editor({
       window.history.replaceState(null, "", `/editor/${roomId}`);
       setIsRoom(true);
     }
-  }, [id, isRoom]);
+  }, [id, isRoom, location.search]);
 
   useEffect(() => {
     const s = io(window.location.origin);
@@ -398,14 +435,15 @@ export default function Editor({
   );
 
   const addText = useCallback(() => {
+    const newId = uuidv4();
     const newObj: CanvasObject = {
-      id: uuidv4(),
+      id: newId,
       type: "text",
       x: logicalSize.width / 2 - 50,
       y: logicalSize.height / 2 - 20,
       text: "Double click to edit",
       fontSize: 40,
-      fontFamily: "Impact, sans-serif",
+      fontFamily: activeFont,
       fill: "#ffffff",
       stroke: "#000000",
       strokeWidth: 2,
@@ -413,7 +451,46 @@ export default function Editor({
     };
     const newObjs = [...objectsRef.current, newObj];
     emitUpdate(newObjs);
-  }, [logicalSize, emitUpdate]);
+    setSelectedId(newId);
+    ensureFontLoaded(activeFont).then(() => {
+      stageRef.current?.batchDraw();
+    });
+  }, [logicalSize, emitUpdate, activeFont]);
+
+  const handleSelectFont = useCallback(
+    (fontFamily: string) => {
+      setActiveFont(fontFamily);
+      const selectedObj = objectsRef.current.find((o) => o.id === selectedId);
+      if (selectedObj && selectedObj.type === "text") {
+        const newObjs = objectsRef.current.map((o) =>
+          o.id === selectedId ? { ...o, fontFamily } : o,
+        );
+        emitUpdate(newObjs);
+      }
+      ensureFontLoaded(fontFamily).then(() => {
+        if (trRef.current) trRef.current.forceUpdate();
+        stageRef.current?.batchDraw();
+      });
+    },
+    [selectedId, emitUpdate],
+  );
+
+  const handleApplyFontToAllText = useCallback(
+    (fontFamily: string) => {
+      const hasText = objectsRef.current.some((o) => o.type === "text");
+      if (!hasText) return;
+      const newObjs = objectsRef.current.map((o) =>
+        o.type === "text" ? { ...o, fontFamily } : o,
+      );
+      emitUpdate(newObjs);
+      ensureFontLoaded(fontFamily).then(() => {
+        if (trRef.current) trRef.current.forceUpdate();
+        stageRef.current?.batchDraw();
+      });
+      toast.success("Font applied to all text layers");
+    },
+    [emitUpdate],
+  );
 
   const addImage = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -764,49 +841,137 @@ export default function Editor({
     document.body.removeChild(link);
   };
 
-  const shareMeme = async () => {
+  const renderMemeSnapshot = useCallback(async (): Promise<RenderedMemeSnapshot | null> => {
+    if (!stageRef.current) return null;
     setSelectedId(null);
     setIsExporting(true);
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 80));
 
     try {
-      const finalFormat = exportFormat === "image/gif" ? "image/png" : exportFormat;
-      const uri = stageRef.current.toDataURL({
-        pixelRatio: exportScale / renderScale,
-        mimeType: finalFormat,
-        quality: (finalFormat === "image/jpeg" || finalFormat === "image/webp") ? exportQuality : undefined,
+      const stage = stageRef.current;
+      const scaleForFit = Math.max(
+        0.1,
+        Math.min(
+          Math.max(10, containerSize.width - 40) / logicalSize.width,
+          Math.max(10, containerSize.height - 40) / logicalSize.height,
+        ),
+      );
+      const activeScale = zoomLevel === "fit" ? scaleForFit : zoomLevel;
+      const activePos =
+        zoomLevel === "fit"
+          ? {
+              x: (containerSize.width - logicalSize.width * scaleForFit) / 2,
+              y: (containerSize.height - logicalSize.height * scaleForFit) / 2,
+            }
+          : stagePos;
+
+      const dataUrl: string = stage.toDataURL({
+        x: activePos.x,
+        y: activePos.y,
+        width: logicalSize.width * activeScale,
+        height: logicalSize.height * activeScale,
+        pixelRatio: exportScale / activeScale,
+        mimeType: "image/png",
       });
 
-      const ext = finalFormat.split('/')[1] || "png";
-      const response = await fetch(uri);
+      const response = await fetch(dataUrl);
       const blob = await response.blob();
-      const file = new File([blob], `meme-${roomId}.${ext}`, { type: finalFormat });
+      return {
+        dataUrl,
+        blob,
+        width: Math.round(logicalSize.width * exportScale),
+        height: Math.round(logicalSize.height * exportScale),
+      };
+    } catch (e) {
+      console.error("Failed to render meme snapshot:", e);
+      return null;
+    } finally {
+      setIsExporting(false);
+    }
+  }, [containerSize, logicalSize, zoomLevel, stagePos, exportScale]);
 
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          title: 'My Meme',
-          text: 'Check out this meme I created on MemeForge!',
-          files: [file],
-        });
-        toast.success("Meme shared successfully!");
+  const handleQuickCopyImage = async () => {
+    setQuickCopyingImage(true);
+    try {
+      const snapshot = await renderMemeSnapshot();
+      if (!snapshot) {
+        toast.error("Could not render meme image.");
+        return;
+      }
+      const res = await copyImageBlobToClipboard(snapshot.blob);
+      if (res.ok) {
+        toast.success("Meme image copied to clipboard!");
         if (roomId) {
           recordMetricEvent(roomId, template?.name || "Meme", "share");
         }
       } else {
-        const url = window.URL.createObjectURL(blob);
-        window.open(url, '_blank');
-        toast.info("Opened preview in new tab. You can long-press or right-click to share.");
-        if (roomId) {
-          recordMetricEvent(roomId, template?.name || "Meme", "share");
-        }
-      }
-    } catch (e: any) {
-      if (e.name !== "AbortError") {
-        console.error(e);
-        toast.error("Failed to share meme.");
+        // Fallback: open Share modal so user can copy Data URL or share link
+        toast.info("Direct image copy restricted — opening Share panel.");
+        setShowShareModal(true);
       }
     } finally {
-      setIsExporting(false);
+      setQuickCopyingImage(false);
+    }
+  };
+
+  const handleQuickCopyShareLink = async () => {
+    const baseUrl = `${window.location.origin}/editor/${roomId}`;
+    const encoded = encodeShareState({
+      t: template?.url || uploadedImageUrl || null,
+      o: objects,
+      w: watermark,
+    });
+    const url = encoded ? `${baseUrl}?share=${encoded}` : baseUrl;
+    const ok = await copyTextWithFallback(url);
+    if (ok) {
+      setQuickCopiedLink(true);
+      toast.success("Shareable meme link copied!");
+      if (roomId) {
+        recordMetricEvent(roomId, template?.name || "Meme", "share");
+      }
+      setTimeout(() => setQuickCopiedLink(false), 2000);
+    } else {
+      toast.error("Could not copy link.");
+    }
+  };
+
+  const publishMemeForShare = async (): Promise<boolean> => {
+    if (!user) {
+      toast.error("Sign in to publish a short cloud link.");
+      return false;
+    }
+    if (!db || db.app.options.projectId === "MOCK") {
+      toast.error("Cloud storage is not configured.");
+      return false;
+    }
+    setSaving(true);
+    try {
+      const ref = doc(db, "memes", roomId!);
+      const snap = await getDoc(ref);
+      if (snap.exists() && snap.data().authorId !== user.uid) {
+        toast.error("You are not the author of this meme.");
+        return false;
+      }
+      await setDoc(
+        ref,
+        {
+          objects,
+          templateUrl: template?.url || uploadedImageUrl || null,
+          watermark,
+          authorId: snap.exists() ? snap.data().authorId : user.uid,
+          createdAt: snap.exists()
+            ? snap.data().createdAt
+            : new Date().toISOString(),
+        },
+        { merge: true },
+      );
+      setHasUnsavedChanges(false);
+      return true;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `memes/${roomId}`);
+      return false;
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1332,7 +1497,7 @@ export default function Editor({
                   name="bg bg-image-node"
                   width={logicalSize.width}
                   height={logicalSize.height}
-                  opacity={isBackgroundAnimatedGif ? 0 : 1}
+                  opacity={isBackgroundAnimatedGif && !isExporting ? 0 : 1}
                 />
               ) : (
                 <Rect
@@ -1340,12 +1505,12 @@ export default function Editor({
                   height={logicalSize.height}
                   fill="#ffffff"
                   name="bg bg-image-node"
-                  opacity={isBackgroundAnimatedGif ? 0 : 1}
+                  opacity={isBackgroundAnimatedGif && !isExporting ? 0 : 1}
                 />
               )}
 
               {/* Grid Layout (if enabled) */}
-              {isGridEnabled && (
+              {isGridEnabled && !isExporting && (
                   (() => {
                     const lines = [];
                     const SNAP_SIZE = 20;
@@ -1588,6 +1753,39 @@ export default function Editor({
                 </button>
               </div>
 
+              <div className="pt-1 space-y-1.5">
+                <FontPickerDropdown
+                  id="sidebar-google-font-picker"
+                  label="Text Font"
+                  helperText={
+                    objects.find((o) => o.id === selectedId)?.type === "text"
+                      ? "Applies to selected text"
+                      : "Default for new text"
+                  }
+                  value={
+                    (objects.find((o) => o.id === selectedId)?.type === "text"
+                      ? objects.find((o) => o.id === selectedId)?.fontFamily
+                      : activeFont) || activeFont
+                  }
+                  onChange={handleSelectFont}
+                />
+                {objects.some((o) => o.type === "text") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const currentFont =
+                        (objects.find((o) => o.id === selectedId)?.type === "text"
+                          ? objects.find((o) => o.id === selectedId)?.fontFamily
+                          : activeFont) || activeFont;
+                      handleApplyFontToAllText(currentFont);
+                    }}
+                    className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300 transition-colors pl-0.5"
+                  >
+                    Apply to all text layers
+                  </button>
+                )}
+              </div>
+
               <label className="flex items-center gap-2 justify-center w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl font-bold cursor-pointer transition-all border border-white/5">
                 <ImageIcon className="w-4 h-4" /> Add Image
                 <input
@@ -1689,36 +1887,15 @@ export default function Editor({
                 </h3>
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[10px] text-zinc-400 uppercase mb-2 block">
-                      Font Family
-                    </label>
-                    <select
+                    <FontPickerDropdown
+                      id="layer-google-font-picker"
+                      label="Font Family"
                       value={
                         objects.find((o) => o.id === selectedId)?.fontFamily ||
-                        "Impact, sans-serif"
+                        activeFont
                       }
-                      onChange={(e) => {
-                        const newObjs = objects.map((o) =>
-                          o.id === selectedId
-                            ? { ...o, fontFamily: e.target.value }
-                            : o,
-                        );
-                        emitUpdate(newObjs);
-                      }}
-                      className="w-full bg-zinc-950 border border-white/10 rounded-lg p-2 text-sm text-white appearance-none"
-                    >
-                      <option value="Impact, sans-serif">Impact</option>
-                      <option value="Arial, sans-serif">Arial</option>
-                      <option value="'Comic Sans MS', cursive, sans-serif">
-                        Comic Sans
-                      </option>
-                      <option value="'Times New Roman', Times, serif">
-                        Times New Roman
-                      </option>
-                      <option value="'Courier New', Courier, monospace">
-                        Courier New
-                      </option>
-                    </select>
+                      onChange={handleSelectFont}
+                    />
                   </div>
                   <div>
                     <label className="text-[10px] text-zinc-400 uppercase flex justify-between mb-2">
@@ -2271,53 +2448,49 @@ export default function Editor({
                   <CloudUpload className="w-4 h-4" /> Submit to Database
                 </button>
                 <button
-                  onClick={shareMeme}
+                  type="button"
+                  onClick={() => setShowShareModal(true)}
                   disabled={isExporting}
-                  className="flex items-center gap-2 justify-center w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition-all shadow-lg disabled:opacity-50"
+                  className="flex items-center gap-2 justify-center w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg disabled:opacity-50"
                 >
-                  <Share2 className="w-4 h-4" /> Share Meme
+                  <Share2 className="w-4 h-4" /> Share & Social
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleQuickCopyImage}
+                  disabled={isExporting || quickCopyingImage}
+                  className="flex items-center justify-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl py-2.5 px-3 text-xs font-semibold transition-colors border border-white/10 whitespace-nowrap disabled:opacity-50"
+                >
+                  <Copy className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span>{quickCopyingImage ? "Copying..." : "Copy Image"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleQuickCopyShareLink}
+                  className="flex items-center justify-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl py-2.5 px-3 text-xs font-semibold transition-colors border border-white/10 whitespace-nowrap"
+                >
+                  {quickCopiedLink ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Link2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  )}
+                  <span>{quickCopiedLink ? "Copied!" : "Copy Link"}</span>
                 </button>
               </div>
 
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(window.location.href);
-                  toast.success("Collab link copied!");
+                type="button"
+                onClick={async () => {
+                  const ok = await copyTextWithFallback(window.location.href);
+                  if (ok) toast.success("Collab link copied!");
                 }}
-                className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl font-bold transition-all border border-emerald-500/20 mt-2"
+                className="flex items-center gap-2 justify-center w-full py-3 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl font-bold transition-all border border-emerald-500/20 mt-1"
               >
                 <Users className="w-4 h-4" /> Invite Collaborator
               </button>
-
-              <div className="grid grid-cols-2 gap-2 mt-2">
-                <button
-                  onClick={() => {
-                    const url = encodeURIComponent(window.location.href);
-                    const text = encodeURIComponent(
-                      "Help me make this epic meme on MemeForge!",
-                    );
-                    window.open(
-                      `https://twitter.com/intent/tweet?url=${url}&text=${text}`,
-                      "_blank",
-                    );
-                  }}
-                  className="flex items-center justify-center gap-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 rounded-xl py-2 text-xs font-bold transition-all border border-sky-500/20"
-                >
-                  Twitter
-                </button>
-                <button
-                  onClick={() => {
-                    const url = encodeURIComponent(window.location.href);
-                    window.open(
-                      `https://www.facebook.com/sharer/sharer.php?u=${url}`,
-                      "_blank",
-                    );
-                  }}
-                  className="flex items-center justify-center gap-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 rounded-xl py-2 text-xs font-bold transition-all border border-blue-600/20"
-                >
-                  Facebook
-                </button>
-              </div>
             </div>
 
             <div className="mt-auto pt-6 pb-2">
@@ -2349,6 +2522,24 @@ export default function Editor({
         exportMeme={exportMeme}
         watermark={watermark}
         setWatermark={setWatermark}
+      />
+
+      <ShareModal
+        show={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        roomId={roomId}
+        templateName={template?.name}
+        templateUrl={template?.url || uploadedImageUrl || null}
+        objects={objects}
+        watermark={watermark}
+        onRenderSnapshot={renderMemeSnapshot}
+        onPublishCloudLink={publishMemeForShare}
+        canPublishToCloud={Boolean(user && db && db.app.options.projectId !== "MOCK")}
+        onShareRecorded={() => {
+          if (roomId) {
+            recordMetricEvent(roomId, template?.name || "Meme", "share");
+          }
+        }}
       />
     </>
   );

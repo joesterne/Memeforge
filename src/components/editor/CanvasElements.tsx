@@ -4,6 +4,7 @@ import useImage from "use-image";
 import Konva from "konva";
 import { Sparkles } from "lucide-react";
 import type { CanvasObject } from "../../types/canvas";
+import { ensureFontLoaded } from "./FontPickerDropdown";
 
 export const CanvasImage = memo(
   ({ obj, setSelectedId, handleDragEnd, handleTransformEnd, dragBoundFunc }: any) => {
@@ -62,15 +63,30 @@ export const CanvasText = memo(
     handleTransformEnd,
     onDblClick,
     dragBoundFunc,
-    isExporting,
   }: any) => {
+    const textRef = useRef<any>(null);
     const handleSelect = useCallback(
       () => setSelectedId(obj.id),
       [setSelectedId, obj.id],
     );
 
+    useEffect(() => {
+      let cancelled = false;
+      if (!obj.fontFamily) return;
+      ensureFontLoaded(obj.fontFamily).then(() => {
+        if (!cancelled && textRef.current) {
+          textRef.current.fontFamily(obj.fontFamily);
+          textRef.current.getLayer()?.batchDraw();
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [obj.fontFamily, obj.text]);
+
     return (
       <KonvaText
+        ref={textRef}
         id={obj.id}
         text={obj.text}
         x={obj.x}
